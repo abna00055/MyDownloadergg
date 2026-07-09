@@ -1,0 +1,6 @@
+{
+  "name": "PDF Reader",
+  "description": "A beautiful, native PDF Reader using Mozilla PDF.js in a WebView, controlled by a polished Jetpack Compose bottom bar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
