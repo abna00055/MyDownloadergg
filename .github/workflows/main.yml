@@ -1,0 +1,63 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Verify actual repo contents (truth check)
+      run: |
+        echo "=== Contents of assets/pdfjs as committed to git ==="
+        find app/src/main/assets/pdfjs -maxdepth 2
+
+    - name: Ensure pdf.js build/ exists (download if missing)
+      run: |
+        if [ ! -f "app/src/main/assets/pdfjs/build/pdf.mjs" ]; then
+          echo "build/ missing — downloading official dist as fallback"
+          mkdir -p app/src/main/assets/pdfjs
+          curl -L -o pdfjs-dist.zip https://github.com/mozilla/pdf.js/releases/download/v4.10.38/pdfjs-4.10.38-dist.zip
+          unzip -o pdfjs-dist.zip -d app/src/main/assets/pdfjs
+          rm pdfjs-dist.zip
+        else
+          echo "build/pdf.mjs already present — skipping download"
+        fi
+        echo "=== Final contents of build/ ==="
+        ls -la app/src/main/assets/pdfjs/build/
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Generate debug keystore
+      run: |
+        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+
+    - name: Generate Gradle Wrapper
+      run: gradle wrapper
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Clean previous build
+      run: ./gradlew clean
+
+    - name: Build with Gradle
+      run: ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
