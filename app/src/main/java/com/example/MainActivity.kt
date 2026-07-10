@@ -1008,6 +1008,22 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
+                                    body.selecting-active .page:not(.is-selecting) {
+                                        user-select: none !important;
+                                        -webkit-user-select: none !important;
+                                    }
+                                    body.selecting-active .page:not(.is-selecting) * {
+                                        user-select: none !important;
+                                        -webkit-user-select: none !important;
+                                    }
+                                    body.selecting-active .page.is-selecting {
+                                        user-select: text !important;
+                                        -webkit-user-select: text !important;
+                                    }
+                                    body.selecting-active .page.is-selecting * {
+                                        user-select: text !important;
+                                        -webkit-user-select: text !important;
+                                    }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1285,50 +1301,36 @@ fun PDFReaderScreen(
                                                     var target = e.target;
                                                     var page = getPageElement(target);
                                                     if (page) {
-                                                        var pageNum = page.getAttribute('data-page-number');
-                                                        if (pageNum) {
-                                                            // Disable user-select on all other pages
-                                                            var pages = document.querySelectorAll('.page');
-                                                            pages.forEach(function(p) {
-                                                                if (p.getAttribute('data-page-number') !== pageNum) {
-                                                                    p.style.userSelect = 'none';
-                                                                    p.style.webkitUserSelect = 'none';
-                                                                } else {
-                                                                    p.style.userSelect = 'text';
-                                                                    p.style.webkitUserSelect = 'text';
-                                                                }
-                                                            });
-                                                        }
+                                                        var oldPages = document.querySelectorAll('.page.is-selecting');
+                                                        oldPages.forEach(function(p) {
+                                                            p.classList.remove('is-selecting');
+                                                        });
+                                                        page.classList.add('is-selecting');
+                                                        document.body.classList.add('selecting-active');
                                                     }
                                                 });
 
                                                 document.addEventListener('selectionchange', function() {
                                                     var sel = window.getSelection();
                                                     if (!sel || sel.isCollapsed) {
-                                                        // Restore user-select when selection is cleared
-                                                        var pages = document.querySelectorAll('.page');
-                                                        pages.forEach(function(p) {
-                                                            p.style.userSelect = 'text';
-                                                            p.style.webkitUserSelect = 'text';
+                                                        // Restore when selection is cleared
+                                                        document.body.classList.remove('selecting-active');
+                                                        var oldPages = document.querySelectorAll('.page.is-selecting');
+                                                        oldPages.forEach(function(p) {
+                                                            p.classList.remove('is-selecting');
                                                         });
                                                     } else if (sel.rangeCount > 0) {
                                                         var range = sel.getRangeAt(0);
                                                         var startPage = getPageElement(range.startContainer);
-                                                        var endPage = getPageElement(range.endContainer);
-                                                        if (startPage && endPage && startPage !== endPage) {
-                                                            var textLayer = startPage.querySelector('.textLayer');
-                                                            if (textLayer) {
-                                                                var newRange = document.createRange();
-                                                                newRange.setStart(range.startContainer, range.startOffset);
-                                                                var lastTextNode = getLastTextNode(textLayer);
-                                                                if (lastTextNode) {
-                                                                    newRange.setEnd(lastTextNode, lastTextNode.length);
-                                                                } else {
-                                                                    newRange.setEnd(textLayer, textLayer.childNodes.length);
-                                                                }
-                                                                sel.removeAllRanges();
-                                                                sel.addRange(newRange);
-                                                            }
+                                                        
+                                                        // Auto-set active page if not already done via selectstart
+                                                        if (startPage && !startPage.classList.contains('is-selecting')) {
+                                                            var oldPages = document.querySelectorAll('.page.is-selecting');
+                                                            oldPages.forEach(function(p) {
+                                                                p.classList.remove('is-selecting');
+                                                            });
+                                                            startPage.classList.add('is-selecting');
+                                                            document.body.classList.add('selecting-active');
                                                         }
                                                     }
                                                 });
