@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
                 if (success) {
                     openedPdfName = originalName
                     openedPdfPath = File(context.cacheDir, safeFileName).absolutePath
-                    currentScreen = "reader"
+                    currentScreen = "pdf_reader"
                 }
                 activity?.clearIncomingPdfUri()
             }
