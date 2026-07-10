@@ -1045,11 +1045,6 @@ fun PDFReaderScreen(
                                                         var totalPages = viewer.pagesCount || 0;
                                                         if (totalPages === 0) return;
                                                         
-                                                        var container = document.getElementById('viewerContainer');
-                                                        if (container) {
-                                                            container.dispatchEvent(new Event('scroll'));
-                                                        }
-                                                        
                                                         var pagesToRender = [currentPageNum, currentPageNum - 1, currentPageNum + 1];
                                                         pagesToRender.forEach(function(p) {
                                                             if (p >= 1 && p <= totalPages) {
@@ -1076,6 +1071,8 @@ fun PDFReaderScreen(
                                                         AndroidBridge.onPageChanged(e.pageNumber, total);
                                                     }
                                                     forceRenderCheck();
+                                                    setTimeout(forceRenderCheck, 150);
+                                                    setTimeout(forceRenderCheck, 400);
                                                 });
                                                 PDFViewerApplication.eventBus.on('scalechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.scale) {
@@ -1106,10 +1103,9 @@ fun PDFReaderScreen(
                                                     forceRenderCheck();
                                                 });
                                                 
-                                                setInterval(forceRenderCheck, 350);
                                                 setTimeout(forceRenderCheck, 150);
                                                 setTimeout(forceRenderCheck, 600);
-                                                setTimeout(forceRenderCheck, 1200);
+                                                setTimeout(forceRenderCheck, 1500);
                                                 PDFViewerApplication.eventBus.on('updatefindmatchescount', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.matchesCount) {
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
