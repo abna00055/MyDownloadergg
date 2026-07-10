@@ -41,6 +41,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -60,6 +61,9 @@ import androidx.core.content.FileProvider
 import com.example.ui.theme.MyApplicationTheme
 import java.io.File
 import java.io.FileOutputStream
+import android.media.MediaPlayer
+import android.media.AudioManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -131,11 +135,11 @@ class MainActivity : ComponentActivity() {
                                     type: 'again'
                                 };
                                 if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('findagain', options);
+                                    PDFViewerApplication.eventBus.dispatch('find', options);
                                 } else {
                                     var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
                                     if (fc) {
-                                        fc.executeCommand('findagain', options);
+                                        fc.executeCommand('find', options);
                                     }
                                 }
                             }
@@ -156,11 +160,11 @@ class MainActivity : ComponentActivity() {
                                     type: 'again'
                                 };
                                 if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('findagain', options);
+                                    PDFViewerApplication.eventBus.dispatch('find', options);
                                 } else {
                                     var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
                                     if (fc) {
-                                        fc.executeCommand('findagain', options);
+                                        fc.executeCommand('find', options);
                                     }
                                 }
                             }
@@ -205,11 +209,12 @@ class MainActivity : ComponentActivity() {
         try {
             val safeFileName = getSafePdfFileName(assetName)
             val cacheFile = File(context.cacheDir, safeFileName)
-            if (cacheFile.exists()) return // Already copied
+            val genericFile = File(context.cacheDir, "current_reader_doc.pdf")
+            
             context.assets.open(assetName).use { inputStream ->
-                FileOutputStream(cacheFile).use { outputStream ->
-                    inputStream.copyTo(outputStream)
-                }
+                val bytes = inputStream.readBytes()
+                FileOutputStream(cacheFile).use { it.write(bytes) }
+                FileOutputStream(genericFile).use { it.write(bytes) }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -221,7 +226,8 @@ class MainActivity : ComponentActivity() {
 class PdfAndroidBridge(
     private val onPageChanged: (page: Int, total: Int) -> Unit,
     private val onScaleChanged: (scale: Float) -> Unit,
-    private val onSearchMatchesChanged: (current: Int, total: Int) -> Unit
+    private val onSearchMatchesChanged: (current: Int, total: Int) -> Unit,
+    private val onLinkClicked: (url: String, text: String) -> Unit
 ) {
     @JavascriptInterface
     fun onPageChanged(pageNumber: Int, pagesCount: Int) {
@@ -236,6 +242,11 @@ class PdfAndroidBridge(
     @JavascriptInterface
     fun onSearchMatchesChanged(current: Int, total: Int) {
         onSearchMatchesChanged.invoke(current, total)
+    }
+
+    @JavascriptInterface
+    fun onLinkClicked(url: String, text: String) {
+        onLinkClicked.invoke(url, text)
     }
 }
 
@@ -258,6 +269,7 @@ fun PDFReaderScreen(
 ) {
     val context = LocalContext.current
     val activity = context as? ComponentActivity
+    val scope = rememberCoroutineScope()
 
     // SharedPreferences for Bookmarks & Favorites
     val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
@@ -268,6 +280,108 @@ fun PDFReaderScreen(
     var currentScale by remember { mutableStateOf(1.0f) }
     var pdfName by remember { mutableStateOf("sample.pdf") }
     var isCopying by remember { mutableStateOf(false) }
+
+    // Audio & Embedded Web Browser States
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var playingAudioUrl by remember { mutableStateOf<String?>(null) }
+    var playingAudioText by remember { mutableStateOf("") }
+    var isAudioPlayingState by remember { mutableStateOf(false) }
+    var audioProgress by remember { mutableStateOf(0.0f) }
+    var audioDurationText by remember { mutableStateOf("0:00") }
+    var audioPositionText by remember { mutableStateOf("0:00") }
+    var activeWebUrl by remember { mutableStateOf<String?>(null) }
+    var isWebLoading by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            mediaPlayer?.release()
+        }
+    }
+
+    // Check if the URL is an audio resource
+    fun isAudioUrl(url: String): Boolean {
+        val cleanUrl = url.lowercase()
+        return cleanUrl.endsWith(".mp3") || 
+               cleanUrl.endsWith(".wav") || 
+               cleanUrl.endsWith(".ogg") || 
+               cleanUrl.endsWith(".m4a") || 
+               cleanUrl.endsWith(".aac") ||
+               cleanUrl.contains("/audio/") || 
+               cleanUrl.contains("/pronunciation/") || 
+               cleanUrl.contains("/sound/") ||
+               cleanUrl.contains("audio_") ||
+               cleanUrl.contains("pronounce")
+    }
+
+    fun playAudio(url: String, text: String) {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+            isAudioPlayingState = false
+            audioProgress = 0.0f
+            playingAudioUrl = url
+            playingAudioText = text
+
+            val mp = MediaPlayer().apply {
+                setAudioStreamType(AudioManager.STREAM_MUSIC)
+                setDataSource(url)
+                setOnPreparedListener {
+                    it.start()
+                    isAudioPlayingState = true
+                }
+                setOnCompletionListener {
+                    isAudioPlayingState = false
+                    audioProgress = 1.0f
+                    scope.launch {
+                        delay(1500)
+                        if (!isAudioPlayingState) {
+                            playingAudioUrl = null
+                        }
+                    }
+                }
+                setOnErrorListener { _, _, _ ->
+                    isAudioPlayingState = false
+                    Toast.makeText(context, "خطأ في تشغيل الصوت", Toast.LENGTH_SHORT).show()
+                    false
+                }
+            }
+            mediaPlayer = mp
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(context, "فشل تحميل ملف الصوت", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(isAudioPlayingState, playingAudioUrl) {
+        if (isAudioPlayingState) {
+            while (isAudioPlayingState) {
+                mediaPlayer?.let { mp ->
+                    try {
+                        if (mp.isPlaying) {
+                            val pos = mp.currentPosition
+                            val dur = mp.duration
+                            if (dur > 0) {
+                                audioProgress = pos.toFloat() / dur.toFloat()
+                                
+                                val posMin = (pos / 1000) / 60
+                                val posSec = (pos / 1000) % 60
+                                audioPositionText = String.format("%d:%02d", posMin, posSec)
+
+                                val durMin = (dur / 1000) / 60
+                                val durSec = (dur / 1000) % 60
+                                audioDurationText = String.format("%d:%02d", durMin, durSec)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+                }
+                delay(100)
+            }
+        }
+    }
 
     // Search state
     var isSearching by remember { mutableStateOf(false) }
@@ -509,8 +623,6 @@ fun PDFReaderScreen(
             .apply()
     }
 
-    val scope = rememberCoroutineScope()
-
     // Launcher for selecting external PDFs
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -597,6 +709,16 @@ fun PDFReaderScreen(
                                         currentMatch = current
                                         totalMatches = total
                                     }
+                                },
+                                onLinkClicked = { url, text ->
+                                    post {
+                                        val isAudio = isAudioUrl(url)
+                                        if (isAudio) {
+                                            playAudio(url, text)
+                                        } else {
+                                            activeWebUrl = url
+                                        }
+                                    }
                                 }
                             ),
                             "AndroidBridge"
@@ -654,6 +776,26 @@ fun PDFReaderScreen(
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
                                                     }
                                                 });
+
+                                                // Intercept all document links to play audio or show standard web links in embedded browser
+                                                document.addEventListener('click', function(e) {
+                                                    var target = e.target;
+                                                    while (target && target.tagName !== 'A') {
+                                                        target = target.parentNode;
+                                                    }
+                                                    if (target && target.getAttribute('href')) {
+                                                        var href = target.getAttribute('href');
+                                                        var text = target.textContent || target.innerText || "";
+                                                        if (href && href.trim().length > 0 && !href.startsWith('#') && !href.startsWith('javascript:')) {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onLinkClicked) {
+                                                                AndroidBridge.onLinkClicked(href, text.trim());
+                                                            }
+                                                        }
+                                                    }
+                                                }, true);
+
                                             } catch (err) {
                                                 console.error('Error initializing events: ' + err);
                                             }
@@ -693,9 +835,7 @@ fun PDFReaderScreen(
                         }
 
                         // Load Mozilla PDFjs with cached copy
-                        val safeFileName = getSafePdfFileName(pdfName)
-                        val encodedName = android.net.Uri.encode(safeFileName)
-                        loadUrl("file:///android_asset/pdfjs/web/viewer.html?file=file://${ctx.cacheDir.absolutePath}/$encodedName")
+                        loadUrl("file:///android_asset/pdfjs/web/viewer.html?file=file://${ctx.cacheDir.absolutePath}/current_reader_doc.pdf")
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1770,6 +1910,239 @@ fun PDFReaderScreen(
                 }
             }
         }
+
+        // --- Pronunciation Audio Mini-Player (Dynamic Island Style) ---
+        AnimatedVisibility(
+            visible = playingAudioUrl != null,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp, start = 24.dp, end = 24.dp)
+                .zIndex(25f)
+        ) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1E1E22)
+                ),
+                shape = RoundedCornerShape(24.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp)
+                    .shadow(10.dp, RoundedCornerShape(24.dp))
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // Play / Pause Button
+                        IconButton(
+                            onClick = {
+                                mediaPlayer?.let { mp ->
+                                    if (mp.isPlaying) {
+                                        mp.pause()
+                                        isAudioPlayingState = false
+                                    } else {
+                                        mp.start()
+                                        isAudioPlayingState = true
+                                    }
+                                } ?: run {
+                                    playingAudioUrl?.let { playAudio(it, playingAudioText) }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (isAudioPlayingState) Icons.Default.PlayArrow else Icons.Default.PlayArrow,
+                                contentDescription = "تشغيل/إيقاف مؤقت",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Clicked word Text and Time Progress Info
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = playingAudioText.ifEmpty { "نطق الكلمة" },
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "$audioPositionText / $audioDurationText",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Replay/Repeat Button
+                        IconButton(
+                            onClick = { playingAudioUrl?.let { playAudio(it, playingAudioText) } },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "إعادة النطق",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Close/Dismiss Button (x)
+                        IconButton(
+                            onClick = {
+                                mediaPlayer?.stop()
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                isAudioPlayingState = false
+                                playingAudioUrl = null
+                                playingAudioText = ""
+                                audioProgress = 0.0f
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "إغلاق",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Linear progress bar mimicking the audio track progress
+                    LinearProgressIndicator(
+                        progress = audioProgress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(CircleShape),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = Color.White.copy(alpha = 0.15f)
+                    )
+                }
+            }
+        }
+
+        // --- Embedded Web Browser Overlaid on Top of PDF reader ---
+        if (activeWebUrl != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .zIndex(30f)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Browser Header
+                    Surface(
+                        tonalElevation = 4.dp,
+                        shadowElevation = 4.dp,
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .height(56.dp)
+                                .padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { activeWebUrl = null },
+                                modifier = Modifier.testTag("browser_back_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowBack,
+                                    contentDescription = "رجوع",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Column(
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "تصفح الرابط",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = activeWebUrl ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            if (isWebLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
+                        }
+                    }
+
+                    // Embedded web viewer
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
+                                }
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        isWebLoading = true
+                                    }
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        isWebLoading = false
+                                    }
+                                }
+                                loadUrl(activeWebUrl ?: "")
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .navigationBarsPadding()
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1903,13 +2276,17 @@ private fun DocumentInfoTextItem(
 private fun copyUriToCache(context: Context, uri: Uri, safeFileName: String): Boolean {
     return try {
         val cacheFile = File(context.cacheDir, safeFileName)
+        val genericFile = File(context.cacheDir, "current_reader_doc.pdf")
         if (cacheFile.exists()) {
             cacheFile.delete()
         }
+        if (genericFile.exists()) {
+            genericFile.delete()
+        }
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            FileOutputStream(cacheFile).use { outputStream ->
-                inputStream.copyTo(outputStream)
-            }
+            val bytes = inputStream.readBytes()
+            FileOutputStream(cacheFile).use { it.write(bytes) }
+            FileOutputStream(genericFile).use { it.write(bytes) }
         }
         true
     } catch (e: Exception) {
