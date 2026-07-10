@@ -20,6 +20,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -78,9 +80,32 @@ class MainActivity : ComponentActivity() {
 
     private var webViewRef: WebView? = null
 
+    // For "Open With" incoming intent tracking
+    val incomingPdfUriState = mutableStateOf<Uri?>(null)
+
+    fun clearIncomingPdfUri() {
+        incomingPdfUriState.value = null
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent != null && intent.action == Intent.ACTION_VIEW) {
+            val uri = intent.data
+            if (uri != null) {
+                incomingPdfUriState.value = uri
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIncomingIntent(intent)
 
         // Initialize PDFBox
         try {
@@ -110,6 +135,28 @@ class MainActivity : ComponentActivity() {
         var openedPdfName by remember { mutableStateOf("sample.pdf") }
         var openedPdfPath by remember { mutableStateOf("") }
         var isCopyingFile by remember { mutableStateOf(false) }
+
+        // Reactively observe and open any PDF received from other applications ("Open With")
+        val activity = context as? MainActivity
+        val incomingUri = activity?.incomingPdfUriState?.value
+
+        LaunchedEffect(incomingUri) {
+            if (incomingUri != null) {
+                isCopyingFile = true
+                val originalName = getFileNameFromUri(context, incomingUri) ?: "External Document.pdf"
+                val safeFileName = getSafePdfFileName(originalName)
+                val success = withContext(Dispatchers.IO) {
+                    copyUriToCache(context, incomingUri, safeFileName)
+                }
+                isCopyingFile = false
+                if (success) {
+                    openedPdfName = originalName
+                    openedPdfPath = File(context.cacheDir, safeFileName).absolutePath
+                    currentScreen = "reader"
+                }
+                activity?.clearIncomingPdfUri()
+            }
+        }
         
         val scope = rememberCoroutineScope()
 
@@ -987,11 +1034,48 @@ fun PDFReaderScreen(
                                                     AndroidBridge.onScaleChanged(initialScale);
                                                 }
                                                 
+                                                function forceRenderCheck() {
+                                                    try {
+                                                        if (typeof PDFViewerApplication === 'undefined' || !PDFViewerApplication.pdfViewer) return;
+                                                        var viewer = PDFViewerApplication.pdfViewer;
+                                                        var queue = viewer.renderingQueue;
+                                                        if (!queue) return;
+                                                        
+                                                        var currentPageNum = PDFViewerApplication.page || 1;
+                                                        var totalPages = viewer.pagesCount || 0;
+                                                        if (totalPages === 0) return;
+                                                        
+                                                        var container = document.getElementById('viewerContainer');
+                                                        if (container) {
+                                                            container.dispatchEvent(new Event('scroll'));
+                                                        }
+                                                        
+                                                        var pagesToRender = [currentPageNum, currentPageNum - 1, currentPageNum + 1];
+                                                        pagesToRender.forEach(function(p) {
+                                                            if (p >= 1 && p <= totalPages) {
+                                                                var view = viewer.getPageView(p - 1);
+                                                                if (view) {
+                                                                    if (view.renderingState === 0 || view.renderingState === 2) {
+                                                                        try {
+                                                                            queue.renderView(view);
+                                                                        } catch (e) {
+                                                                            console.error("Force rendering page " + p + " failed: ", e);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        });
+                                                    } catch (err) {
+                                                        console.error("forceRenderCheck failed", err);
+                                                    }
+                                                }
+                                                
                                                 PDFViewerApplication.eventBus.on('pagechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined') {
                                                         var total = e.pagesCount || (typeof PDFViewerApplication !== 'undefined' ? PDFViewerApplication.pagesCount : 0) || 0;
                                                         AndroidBridge.onPageChanged(e.pageNumber, total);
                                                     }
+                                                    forceRenderCheck();
                                                 });
                                                 PDFViewerApplication.eventBus.on('scalechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.scale) {
@@ -1001,15 +1085,31 @@ fun PDFReaderScreen(
                                                             AndroidBridge.onScaleChanged(e.scale);
                                                         }
                                                     }
+                                                    forceRenderCheck();
                                                 });
                                                 PDFViewerApplication.eventBus.on('pagerendered', function(e) {
                                                     if (!window.minPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
                                                         window.minPdfScale = PDFViewerApplication.pdfViewer.currentScale;
                                                     }
+                                                    forceRenderCheck();
                                                 });
+                                                
+                                                var viewerContainer = document.getElementById('viewerContainer');
+                                                if (viewerContainer) {
+                                                    viewerContainer.addEventListener('scroll', function() {
+                                                        forceRenderCheck();
+                                                    });
+                                                }
+                                                
                                                 window.addEventListener('resize', function() {
                                                     window.minPdfScale = null;
+                                                    forceRenderCheck();
                                                 });
+                                                
+                                                setInterval(forceRenderCheck, 350);
+                                                setTimeout(forceRenderCheck, 150);
+                                                setTimeout(forceRenderCheck, 600);
+                                                setTimeout(forceRenderCheck, 1200);
                                                 PDFViewerApplication.eventBus.on('updatefindmatchescount', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.matchesCount) {
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
@@ -1106,23 +1206,112 @@ fun PDFReaderScreen(
             )
         }
 
-        // Subtle top gradient to ensure white status bar icons are beautifully readable against white PDF page content
+        // Enhanced top status bar dimming overlay to ensure white system status bar icons are beautifully readable
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(64.dp)
                 .background(
                     brush = androidx.compose.ui.graphics.Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.22f),
-                            Color.Black.copy(alpha = 0.08f),
+                            Color.Black.copy(alpha = 0.65f),
+                            Color.Black.copy(alpha = 0.35f),
+                            Color.Black.copy(alpha = 0.12f),
                             Color.Transparent
                         )
                     )
                 )
-                .zIndex(1f)
+                .zIndex(10f)
         )
+
+        // WPS & PDF Reader Pro inspired scrollbar page indicator that fades out after 900ms of inactivity
+        var showPageIndicator by remember { mutableStateOf(false) }
+        
+        LaunchedEffect(currentPage) {
+            if (totalPages > 1) {
+                showPageIndicator = true
+                delay(900)
+                showPageIndicator = false
+            }
+        }
+
+        AnimatedVisibility(
+            visible = showPageIndicator,
+            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
+            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp)
+                .zIndex(15f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight(0.6f)
+                    .width(180.dp)
+            ) {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val trackHeightPx = constraints.maxHeight
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    val trackHeightDp = with(density) { trackHeightPx.toDp() }
+                    
+                    // Vertical scrollbar track
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .width(3.dp)
+                            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(1.5.dp))
+                    )
+                    
+                    val progressFraction = if (totalPages > 1) {
+                        (currentPage - 1).toFloat() / (totalPages - 1).toFloat()
+                    } else {
+                        0f
+                    }
+                    
+                    val animatedProgress by animateFloatAsState(
+                        targetValue = progressFraction,
+                        animationSpec = spring(stiffness = androidx.compose.animation.core.Spring.StiffnessLow),
+                        label = "scroll_progress"
+                    )
+                    
+                    val thumbHeight = 40.dp
+                    val yOffset = (trackHeightDp - thumbHeight) * animatedProgress
+                    
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(y = yOffset),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        // WPS style tooltip with PDF Reader Pro purple theme
+                        Surface(
+                            color = Color(0xE67C3AED), // Beautiful semi-translucent purple
+                            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp, topEnd = 4.dp, bottomEnd = 4.dp),
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Text(
+                                text = "$currentPage / $totalPages",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                        
+                        // Scroll thumb slider
+                        Box(
+                            modifier = Modifier
+                                .size(width = 8.dp, height = 36.dp)
+                                .background(Color(0xFF8B5CF6), RoundedCornerShape(4.dp))
+                                .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                        )
+                    }
+                }
+            }
+        }
 
         // FLOATING TOP BAR - Modelled after PDF Reader Pro
         AnimatedVisibility(
@@ -2220,7 +2409,7 @@ fun PDFReaderScreen(
                     .shadow(10.dp, RoundedCornerShape(24.dp))
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -2243,56 +2432,67 @@ fun PDFReaderScreen(
                                 }
                             },
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = "تشغيل/إيقاف مؤقت",
                                 tint = Color.White,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Clicked word Text and Time Progress Info
                         Column(
                             modifier = Modifier.weight(1f)
                         ) {
+                            val displayText = if (playingAudioText.isNotBlank()) playingAudioText else (playingAudioUrl?.let { extractWordFromUrl(it) } ?: "نطق الكلمة")
+                            val textLength = displayText.length
+                            val fontSize = when {
+                                textLength > 24 -> 11.sp
+                                textLength > 18 -> 13.sp
+                                textLength > 12 -> 14.sp
+                                else -> 16.sp
+                            }
                             Text(
-                                text = if (playingAudioText.isNotBlank()) playingAudioText else (playingAudioUrl?.let { extractWordFromUrl(it) } ?: "نطق الكلمة"),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                text = displayText,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = fontSize
+                                ),
                                 color = Color.White,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                             Text(
                                 text = "$audioPositionText / $audioDurationText",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                 color = Color.White.copy(alpha = 0.6f)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Replay/Repeat Button
                         IconButton(
                             onClick = { playingAudioUrl?.let { playAudio(it, playingAudioText) } },
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "إعادة النطق",
                                 tint = Color.White,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         // Close/Dismiss Button (x)
                         IconButton(
@@ -2306,14 +2506,14 @@ fun PDFReaderScreen(
                                 audioProgress = 0.0f
                             },
                             modifier = Modifier
-                                .size(36.dp)
+                                .size(32.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "إغلاق",
                                 tint = Color.White,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -3452,13 +3652,21 @@ fun copyFileToCache(context: Context, path: String, safeFileName: String): Boole
         if (!srcFile.exists()) return false
         val cacheFile = File(context.cacheDir, safeFileName)
         val genericFile = File(context.cacheDir, "current_reader_doc.pdf")
-        if (cacheFile.exists()) cacheFile.delete()
-        if (genericFile.exists()) genericFile.delete()
         
-        srcFile.inputStream().use { inputStream ->
-            val bytes = inputStream.readBytes()
-            FileOutputStream(cacheFile).use { it.write(bytes) }
-            FileOutputStream(genericFile).use { it.write(bytes) }
+        if (srcFile.absolutePath != cacheFile.absolutePath) {
+            if (cacheFile.exists()) cacheFile.delete()
+            srcFile.inputStream().use { inputStream ->
+                val bytes = inputStream.readBytes()
+                FileOutputStream(cacheFile).use { it.write(bytes) }
+            }
+        }
+        
+        if (srcFile.absolutePath != genericFile.absolutePath) {
+            if (genericFile.exists()) genericFile.delete()
+            srcFile.inputStream().use { inputStream ->
+                val bytes = inputStream.readBytes()
+                FileOutputStream(genericFile).use { it.write(bytes) }
+            }
         }
         true
     } catch (e: Exception) {
@@ -3522,6 +3730,26 @@ fun scanPdfFilesOnDevice(context: Context): List<PdfFileItem> {
                         size = size,
                         pages = pages,
                         dateModified = dateModified
+                    )
+                )
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    // Also scan cache dir for PDFs generated by tools
+    try {
+        context.cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.extension.lowercase() == "pdf" && file.name != "current_reader_doc.pdf") {
+                val pages = getPdfPageCount(context, file.absolutePath)
+                pdfs.add(
+                    PdfFileItem(
+                        name = file.name,
+                        path = file.absolutePath,
+                        size = file.length(),
+                        pages = pages,
+                        dateModified = file.lastModified()
                     )
                 )
             }
@@ -3725,7 +3953,8 @@ fun MainNavigationScreen(
                 )
                 2 -> ToolsScreen(
                     pdfFiles = pdfFiles,
-                    onOpenFile = onOpenFile
+                    onOpenFile = onOpenFile,
+                    onRefresh = onRefreshScan
                 )
                 3 -> SettingsScreen(
                     pdfFiles = pdfFiles
@@ -4140,9 +4369,11 @@ fun FoldersScreen(
 @Composable
 fun ToolsScreen(
     pdfFiles: List<PdfFileItem>,
-    onOpenFile: (PdfFileItem) -> Unit
+    onOpenFile: (PdfFileItem) -> Unit,
+    onRefresh: () -> Unit
 ) {
     var activeTool by remember { mutableStateOf<String?>(null) }
+    
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -4168,6 +4399,7 @@ fun ToolsScreen(
     var lockAllowCopy by remember { mutableStateOf(true) }
     var unlockPassword by remember { mutableStateOf("123456") }
     var selectedImageUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var imageToPdfName by remember { mutableStateOf("مستند_صور") }
 
     // Processing States
     var isProcessing by remember { mutableStateOf(false) }
@@ -4194,6 +4426,14 @@ fun ToolsScreen(
         resultImagePaths = emptyList()
         processingError = ""
         selectedImageUris = emptyList()
+        imageToPdfName = "مستند_صور"
+    }
+
+    if (activeTool != null) {
+        androidx.activity.compose.BackHandler {
+            activeTool = null
+            resetStates()
+        }
     }
 
     val processTool = {
@@ -4305,7 +4545,13 @@ fun ToolsScreen(
                                 }
                                 tempFile.absolutePath
                             }
-                            val out = File(outputDir, "صور_${timestamp}.pdf")
+                            val finalName = if (imageToPdfName.trim().isNotEmpty()) {
+                                val clean = imageToPdfName.trim()
+                                if (clean.lowercase().endsWith(".pdf")) clean else "$clean.pdf"
+                            } else {
+                                "صور_${timestamp}.pdf"
+                            }
+                            val out = File(outputDir, finalName)
                             convertImagesToPdfReal(context, imgPaths, out.absolutePath)
                             resultFilePath = out.absolutePath
                         }
@@ -4316,6 +4562,7 @@ fun ToolsScreen(
                         }
                     }
                     showSuccessCard = true
+                    onRefresh()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -4499,8 +4746,17 @@ fun ToolsScreen(
                                 )
                             }
                             "image_to_pdf" -> {
+                                OutlinedTextField(
+                                    value = imageToPdfName,
+                                    onValueChange = { imageToPdfName = it },
+                                    label = { Text("اسم ملف الـ PDF الناتج") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
                                 Button(
                                     onClick = { pickImagesLauncher.launch("image/*") },
+                                    modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
                                 ) {
                                     Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
@@ -4508,10 +4764,12 @@ fun ToolsScreen(
                                     Text("اختيار صور من المعرض", color = Color.White)
                                 }
                                 if (selectedImageUris.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     Text("تم اختيار ${selectedImageUris.size} صور:", color = Color.White)
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     LazyVerticalGrid(
                                         columns = GridCells.Fixed(3),
-                                        modifier = Modifier.height(120.dp),
+                                        modifier = Modifier.height(150.dp),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
@@ -4520,10 +4778,14 @@ fun ToolsScreen(
                                                 modifier = Modifier
                                                     .aspectRatio(1f)
                                                     .clip(RoundedCornerShape(8.dp))
-                                                    .background(Color.DarkGray),
-                                                contentAlignment = Alignment.Center
+                                                    .background(Color.DarkGray)
                                             ) {
-                                                Icon(Icons.Default.Image, contentDescription = null, tint = Color.LightGray)
+                                                coil.compose.AsyncImage(
+                                                    model = uri,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.fillMaxSize(),
+                                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                                )
                                             }
                                         }
                                     }
@@ -4906,7 +5168,10 @@ fun addWatermarkToPdfReal(context: Context, inputPath: String, outputPath: Strin
         
         contentStream.beginText()
         contentStream.setFont(font, 40f)
-        contentStream.setNonStrokingColor(parsedColor)
+        val r = android.graphics.Color.red(parsedColor)
+        val g = android.graphics.Color.green(parsedColor)
+        val b = android.graphics.Color.blue(parsedColor)
+        contentStream.setNonStrokingColor(r, g, b)
         
         val extGState = com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState()
         extGState.nonStrokingAlphaConstant = opacity
@@ -4945,7 +5210,11 @@ fun addPageNumbersToPdfReal(context: Context, inputPath: String, outputPath: Str
         )
         contentStream.beginText()
         contentStream.setFont(font, 12f)
-        contentStream.setNonStrokingColor(android.graphics.Color.DKGRAY)
+        val dkgray = android.graphics.Color.DKGRAY
+        val r = android.graphics.Color.red(dkgray)
+        val g = android.graphics.Color.green(dkgray)
+        val b = android.graphics.Color.blue(dkgray)
+        contentStream.setNonStrokingColor(r, g, b)
         
         val text = "${i + 1} / $total"
         val width = page.mediaBox.width
@@ -5263,7 +5532,8 @@ fun PdfFileRow(
                         text = formatDate(file.dateModified),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
-                        fontSize = 11.sp
+                        fontSize = 11.sp,
+                        maxLines = 1
                     )
                     Text(
                         text = "•",
@@ -5276,7 +5546,8 @@ fun PdfFileRow(
                         text = "${file.pages} صفحات",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF06B6D4),
-                        fontSize = 11.sp
+                        fontSize = 11.sp,
+                        maxLines = 1
                     )
                     Text(
                         text = "•",
@@ -5294,7 +5565,9 @@ fun PdfFileRow(
                             text = formatSize(file.size),
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFFD0BCFF),
-                            fontSize = 10.sp
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -5402,7 +5675,8 @@ fun PdfFileGridItem(
                     text = "${file.pages} ص • ${formatDate(file.dateModified)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray,
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    maxLines = 1
                 )
                 Box(
                     modifier = Modifier
@@ -5413,7 +5687,9 @@ fun PdfFileGridItem(
                         text = formatSize(file.size),
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                         color = Color(0xFFD0BCFF),
-                        fontSize = 9.sp
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
