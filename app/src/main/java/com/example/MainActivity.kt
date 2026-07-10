@@ -420,9 +420,9 @@ fun PDFReaderScreen(
 
     LaunchedEffect(currentTheme, windowInsetsController) {
         windowInsetsController?.let { controller ->
-            val isLightBackground = currentTheme != "dark"
-            controller.isAppearanceLightStatusBars = isLightBackground
-            controller.isAppearanceLightNavigationBars = isLightBackground
+            // Keep the status bar text/icons always white/light as requested
+            controller.isAppearanceLightStatusBars = false
+            controller.isAppearanceLightNavigationBars = false
         }
     }
 
@@ -817,16 +817,32 @@ fun PDFReaderScreen(
                                                 document.addEventListener('click', function(e) {
                                                     var target = e.target;
                                                     var isLink = false;
+                                                    var clickedLinkNode = null;
                                                     while (target) {
                                                         if (target.tagName === 'A' && target.getAttribute('href')) {
                                                             isLink = true;
+                                                            clickedLinkNode = target;
                                                             break;
                                                         }
                                                         target = target.parentNode;
                                                     }
-                                                    if (isLink) {
-                                                        var href = target.getAttribute('href');
-                                                        var text = target.textContent || target.innerText || "";
+                                                    if (isLink && clickedLinkNode) {
+                                                        var href = clickedLinkNode.getAttribute('href');
+                                                        var text = "";
+                                                        try {
+                                                            var originalPointerEvents = clickedLinkNode.style.pointerEvents;
+                                                            clickedLinkNode.style.pointerEvents = 'none';
+                                                            var elementUnder = document.elementFromPoint(e.clientX, e.clientY);
+                                                            clickedLinkNode.style.pointerEvents = originalPointerEvents || '';
+                                                            if (elementUnder) {
+                                                                text = elementUnder.textContent || elementUnder.innerText || "";
+                                                            }
+                                                        } catch (err) {
+                                                            console.error(err);
+                                                        }
+                                                        if (!text || text.trim().length === 0) {
+                                                            text = clickedLinkNode.textContent || clickedLinkNode.innerText || "";
+                                                        }
                                                         if (href && href.trim().length > 0 && !href.startsWith('#') && !href.startsWith('javascript:')) {
                                                             e.preventDefault();
                                                             e.stopPropagation();
@@ -886,6 +902,24 @@ fun PDFReaderScreen(
                 modifier = Modifier.fillMaxSize()
             )
         }
+
+        // Subtle top gradient to ensure white status bar icons are beautifully readable against white PDF page content
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(48.dp)
+                .background(
+                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.22f),
+                            Color.Black.copy(alpha = 0.08f),
+                            Color.Transparent
+                        )
+                    )
+                )
+                .zIndex(1f)
+        )
 
         // FLOATING TOP BAR - Modelled after PDF Reader Pro
         AnimatedVisibility(
@@ -1154,29 +1188,6 @@ fun PDFReaderScreen(
             }
         }
 
-        // FULL SCREEN RESTORE TRIGGER
-        if (!isBarsVisible) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    .padding(24.dp)
-            ) {
-                FloatingActionButton(
-                    onClick = { isBarsVisible = true },
-                    containerColor = Color(0x9E1E1E24),
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier.size(54.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FullscreenExit,
-                        contentDescription = "Restore Toolbars",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
 
         // -------------------------------------------------------------
         // SHEET A: MORE TOOLS BOTTOM SHEET
@@ -2047,7 +2058,7 @@ fun PDFReaderScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(
-                                text = playingAudioText.ifEmpty { "نطق الكلمة" },
+                                text = if (playingAudioText.isNotBlank()) playingAudioText else (playingAudioUrl?.let { extractWordFromUrl(it) } ?: "نطق الكلمة"),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White,
                                 maxLines = 1,
@@ -2078,7 +2089,7 @@ fun PDFReaderScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(20.dp))
 
                         // Close/Dismiss Button (x)
                         IconButton(
@@ -2471,4 +2482,30 @@ fun PdfPageThumbnail(pageNum: Int, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+fun extractWordFromUrl(url: String): String {
+    try {
+        val uri = android.net.Uri.parse(url)
+        // 1. Try query parameters like "q", "text", "word", "query", "string"
+        for (param in listOf("q", "text", "word", "query", "string", "term")) {
+            val v = uri.getQueryParameter(param)
+            if (!v.isNullOrBlank()) return v.trim()
+        }
+        // 2. Try last path segment without extension
+        val lastSegment = uri.lastPathSegment
+        if (!lastSegment.isNullOrBlank()) {
+            val dotIdx = lastSegment.lastIndexOf('.')
+            val name = if (dotIdx != -1) lastSegment.substring(0, dotIdx) else lastSegment
+            // Decode URL encoding
+            val decoded = java.net.URLDecoder.decode(name, "UTF-8")
+            // If it's a random hex string or number, don't use it
+            if (decoded.length in 2..30 && !decoded.matches(Regex("^[0-9a-fA-F]+$"))) {
+                return decoded.replace('_', ' ').replace('-', ' ').trim()
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return "نطق الكلمة"
 }
