@@ -208,7 +208,34 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
-                        onRefreshScan = { refreshScan() }
+                        onRefreshScan = { refreshScan() },
+                        onRenameFile = { file, newName ->
+                            val renamed = renamePdfFile(context, file.path, newName)
+                            if (renamed != null) {
+                                refreshScan()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                        onDeleteFile = { file ->
+                            try {
+                                val f = File(file.path)
+                                if (f.exists() && f.delete()) {
+                                    val recentPaths = getRecentPdfs(context).toMutableList()
+                                    if (recentPaths.remove(file.path)) {
+                                        sharedPrefs.edit().putString("recent_pdfs_ordered_v2", recentPaths.joinToString("|||")).apply()
+                                    }
+                                    refreshScan()
+                                    true
+                                } else {
+                                    false
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                false
+                            }
+                        }
                     )
                 } else if (currentScreen == "pdf_reader") {
                     PDFReaderScreen(
@@ -453,6 +480,10 @@ fun PDFReaderScreen(
     var currentScale by remember { mutableStateOf(1.0f) }
     var pdfName by remember(initialPdfName) { mutableStateOf(initialPdfName) }
     var isCopying by remember { mutableStateOf(false) }
+
+    androidx.activity.compose.BackHandler {
+        onBackClicked()
+    }
 
     // Audio & Embedded Web Browser States
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
@@ -2714,6 +2745,688 @@ fun formatSize(bytes: Long): String {
     }
 }
 
+fun formatDate(timestampSeconds: Long): String {
+    val millis = if (timestampSeconds < 100000000000L) timestampSeconds * 1000 else timestampSeconds
+    val sdf = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.US)
+    return sdf.format(java.util.Date(millis))
+}
+
+fun formatDetailedDate(timestampSeconds: Long): String {
+    val millis = if (timestampSeconds < 100000000000L) timestampSeconds * 1000 else timestampSeconds
+    val sdf = java.text.SimpleDateFormat("dd MMMM yyyy, hh:mm a", java.util.Locale("ar"))
+    return sdf.format(java.util.Date(millis))
+}
+
+fun getParentFolderName(path: String): String {
+    return try {
+        File(path).parentFile?.name ?: "المستندات"
+    } catch (e: Exception) {
+        "المستندات"
+    }
+}
+
+fun renamePdfFile(context: Context, oldPath: String, newNameWithoutExtension: String): File? {
+    try {
+        val oldFile = File(oldPath)
+        if (!oldFile.exists()) return null
+        
+        val parentDir = oldFile.parentFile ?: return null
+        var cleanNewName = newNameWithoutExtension.trim()
+        if (cleanNewName.isEmpty()) return null
+        if (!cleanNewName.endsWith(".pdf", ignoreCase = true)) {
+            cleanNewName += ".pdf"
+        }
+        
+        val newFile = File(parentDir, cleanNewName)
+        if (newFile.exists()) {
+            return null // Already exists
+        }
+        
+        if (oldFile.renameTo(newFile)) {
+            return newFile
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return null
+}
+
+fun sharePdfFile(context: Context, path: String) {
+    try {
+        val file = File(path)
+        if (!file.exists()) {
+            Toast.makeText(context, "الملف غير موجود", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "com.example.fileprovider",
+            file
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "مشاركة ملف الـ PDF عبر:"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "فشل مشاركة الملف: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+object PdfThumbnailCache {
+    private val cache = android.util.LruCache<String, Bitmap>(50)
+    
+    fun get(path: String): Bitmap? = cache.get(path)
+    fun put(path: String, bitmap: Bitmap) {
+        cache.put(path, bitmap)
+    }
+}
+
+@Composable
+fun PdfThumbnailView(path: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var bitmap by remember(path) { mutableStateOf(PdfThumbnailCache.get(path)) }
+    
+    if (bitmap == null) {
+        LaunchedEffect(path) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val file = File(path)
+                    if (file.exists()) {
+                        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                        val renderer = PdfRenderer(pfd)
+                        if (renderer.pageCount > 0) {
+                            val page = renderer.openPage(0)
+                            val width = 120
+                            val height = 150
+                            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                            val canvas = android.graphics.Canvas(bmp)
+                            canvas.drawColor(android.graphics.Color.WHITE)
+                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            PdfThumbnailCache.put(path, bmp)
+                            bitmap = bmp
+                            page.close()
+                        }
+                        renderer.close()
+                        pfd.close()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+    
+    Box(
+        modifier = modifier
+            .background(Color(0xFF2B2B36))
+            .clip(RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        val currentBitmap = bitmap
+        if (currentBitmap != null) {
+            androidx.compose.foundation.Image(
+                bitmap = currentBitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.PictureAsPdf,
+                contentDescription = null,
+                tint = Color(0xFFEF5350),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileOptionsBottomSheet(
+    file: PdfFileItem,
+    onDismiss: () -> Unit,
+    onFavoriteToggle: () -> Unit,
+    onShare: () -> Unit,
+    onRename: () -> Unit,
+    onInfo: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val isFav = remember(file.isFavorite) { file.isFavorite }
+    
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1E1E24),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(vertical = 12.dp)
+                    .size(width = 40.dp, height = 4.dp)
+                    .background(Color.Gray.copy(alpha = 0.5f), RoundedCornerShape(2.dp))
+            )
+        },
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp, start = 20.dp, end = 20.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "pages ${file.pages}  •  ${formatSize(file.size)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF2B2B36)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Description,
+                        contentDescription = null,
+                        tint = Color(0xFFD0BCFF),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "Quick Actions",
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.Gray,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            BottomSheetActionRow(
+                title = if (isFav) "Remove from Favorites" else "Add to Favorites",
+                subtitle = "Save to your favorites for quick access",
+                icon = if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
+                iconColor = if (isFav) Color(0xFFFFB74D) else Color.White,
+                onClick = {
+                    onFavoriteToggle()
+                    onDismiss()
+                }
+            )
+
+            BottomSheetActionRow(
+                title = "Share",
+                subtitle = "Send this PDF to other apps",
+                icon = Icons.Default.Share,
+                onClick = {
+                    onShare()
+                    onDismiss()
+                }
+            )
+
+            BottomSheetActionRow(
+                title = "Rename",
+                subtitle = "Change the file name",
+                icon = Icons.Default.Edit,
+                onClick = {
+                    onRename()
+                    onDismiss()
+                }
+            )
+
+            BottomSheetActionRow(
+                title = "File Info",
+                subtitle = "View file details and properties",
+                icon = Icons.Default.Info,
+                onClick = {
+                    onInfo()
+                    onDismiss()
+                }
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        onDelete()
+                        onDismiss()
+                    },
+                colors = CardDefaults.cardColors(containerColor = Color(0x1AEF5350)),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, Color(0x33EF5350))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "Delete",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = Color(0xFFEF5350)
+                        )
+                        Text(
+                            text = "Permanently remove this file",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFEF5350).copy(alpha = 0.7f)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x22EF5350)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = Color(0xFFEF5350)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BottomSheetActionRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    iconColor: Color = Color.White,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0x1AFFFFFF)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun RenameFileDialog(
+    file: PdfFileItem,
+    onDismiss: () -> Unit,
+    onRenameConfirm: (String) -> Unit
+) {
+    var textValue by remember { 
+        val baseName = file.name.substringBeforeLast(".")
+        mutableStateOf(baseName) 
+    }
+    
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Rename File",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0x1AFFFFFF)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = Color(0xFFD0BCFF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    text = file.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.align(Alignment.Start)
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                OutlinedTextField(
+                    value = textValue,
+                    onValueChange = { textValue = it },
+                    label = { Text("File name", color = Color(0xFFD0BCFF)) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFD0BCFF),
+                        unfocusedBorderColor = Color(0x33FFFFFF),
+                        focusedContainerColor = Color(0x0AFFFFFF),
+                        unfocusedContainerColor = Color(0x0AFFFFFF)
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "The .pdf extension will be added automatically",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    modifier = Modifier.align(Alignment.Start)
+                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = { onRenameConfirm(textValue) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFD0BCFF),
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                    ) {
+                        Text("Rename", fontWeight = FontWeight.Bold)
+                    }
+                    
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        border = BorderStroke(1.dp, Color(0x33FFFFFF)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White
+                        )
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FileInfoDialog(
+    file: PdfFileItem,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = file.name,
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "File Information",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0x1AD0BCFF)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            tint = Color(0xFFD0BCFF),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = Color(0x0AFFFFFF)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = formatSize(file.size),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(text = "Size", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = Color(0x0AFFFFFF)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "pages ${file.pages}",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(text = "Pages", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = Color(0xFFD0BCFF),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Modified",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = formatDetailedDate(file.dateModified),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray,
+                    modifier = Modifier.padding(start = 26.dp)
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = Color(0xFFD0BCFF),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Location",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = file.path,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray,
+                    lineHeight = 16.sp,
+                    modifier = Modifier.padding(start = 26.dp)
+                )
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFD0BCFF),
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Text("OK", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DeleteConfirmationDialog(
+    file: PdfFileItem,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("حذف الملف", color = Color.White, fontWeight = FontWeight.Bold) },
+        text = { Text("هل أنت متأكد من رغبتك في حذف هذا الملف نهائياً؟ لا يمكن التراجع عن هذا الإجراء.", color = Color.LightGray) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350))
+            ) {
+                Text("حذف", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إلغاء", color = Color.LightGray)
+            }
+        },
+        containerColor = Color(0xFF1E1E24)
+    )
+}
+
+
 fun copyFileToCache(context: Context, path: String, safeFileName: String): Boolean {
     return try {
         val srcFile = File(path)
@@ -2917,15 +3630,25 @@ fun PermissionRationaleScreen(onRequestPermission: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainNavigationScreen(
     pdfFiles: List<PdfFileItem>,
     isScanning: Boolean,
     onOpenFile: (PdfFileItem) -> Unit,
-    onRefreshScan: () -> Unit
+    onRefreshScan: () -> Unit,
+    onRenameFile: (PdfFileItem, String) -> Boolean,
+    onDeleteFile: (PdfFileItem) -> Boolean
 ) {
     var selectedTab by remember { mutableStateOf(0) }
-    
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
+
+    var activeMenuFile by remember { mutableStateOf<PdfFileItem?>(null) }
+    var activeRenameFile by remember { mutableStateOf<PdfFileItem?>(null) }
+    var activeInfoFile by remember { mutableStateOf<PdfFileItem?>(null) }
+    var activeDeleteFile by remember { mutableStateOf<PdfFileItem?>(null) }
+
     Scaffold(
         bottomBar = {
             NavigationBar(
@@ -2973,11 +3696,13 @@ fun MainNavigationScreen(
                     pdfFiles = pdfFiles,
                     isScanning = isScanning,
                     onOpenFile = onOpenFile,
-                    onRefresh = onRefreshScan
+                    onRefresh = onRefreshScan,
+                    onMoreClicked = { activeMenuFile = it }
                 )
                 1 -> FoldersScreen(
                     pdfFiles = pdfFiles,
-                    onOpenFile = onOpenFile
+                    onOpenFile = onOpenFile,
+                    onMoreClicked = { activeMenuFile = it }
                 )
                 2 -> ToolsScreen(
                     pdfFiles = pdfFiles,
@@ -2989,6 +3714,76 @@ fun MainNavigationScreen(
             }
         }
     }
+
+    // Bottom Sheets & Dialogs Rendering
+    val menuFile = activeMenuFile
+    if (menuFile != null) {
+        FileOptionsBottomSheet(
+            file = menuFile,
+            onDismiss = { activeMenuFile = null },
+            onFavoriteToggle = {
+                val currentFav = sharedPrefs.getBoolean("fav_${menuFile.name}", false)
+                sharedPrefs.edit().putBoolean("fav_${menuFile.name}", !currentFav).apply()
+                onRefreshScan()
+            },
+            onShare = {
+                sharePdfFile(context, menuFile.path)
+            },
+            onRename = {
+                activeRenameFile = menuFile
+            },
+            onInfo = {
+                activeInfoFile = menuFile
+            },
+            onDelete = {
+                activeDeleteFile = menuFile
+            }
+        )
+    }
+
+    val renameFile = activeRenameFile
+    if (renameFile != null) {
+        RenameFileDialog(
+            file = renameFile,
+            onDismiss = { activeRenameFile = null },
+            onRenameConfirm = { newName ->
+                if (newName.isNotBlank()) {
+                    val success = onRenameFile(renameFile, newName)
+                    if (success) {
+                        Toast.makeText(context, "تم إعادة تسمية الملف بنجاح", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "فشل في إعادة التسمية (الاسم مكرر أو غير صالح)", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                activeRenameFile = null
+            }
+        )
+    }
+
+    val infoFile = activeInfoFile
+    if (infoFile != null) {
+        FileInfoDialog(
+            file = infoFile,
+            onDismiss = { activeInfoFile = null }
+        )
+    }
+
+    val deleteFile = activeDeleteFile
+    if (deleteFile != null) {
+        DeleteConfirmationDialog(
+            file = deleteFile,
+            onDismiss = { activeDeleteFile = null },
+            onConfirm = {
+                val success = onDeleteFile(deleteFile)
+                if (success) {
+                    Toast.makeText(context, "تم حذف الملف بنجاح", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "فشل في حذف الملف", Toast.LENGTH_SHORT).show()
+                }
+                activeDeleteFile = null
+            }
+        )
+    }
 }
 
 @Composable
@@ -2996,7 +3791,8 @@ fun HomeScreen(
     pdfFiles: List<PdfFileItem>,
     isScanning: Boolean,
     onOpenFile: (PdfFileItem) -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onMoreClicked: (PdfFileItem) -> Unit
 ) {
     val context = LocalContext.current
     var subTabSelected by remember { mutableStateOf(0) }
@@ -3008,11 +3804,11 @@ fun HomeScreen(
     // Filtered and sorted lists
     val filteredFiles = remember(pdfFiles, searchQuery, subTabSelected, recentPaths) {
         val baseList = when (subTabSelected) {
-            0 -> pdfFiles // All Files
-            1 -> {
+            0 -> {
                 // Recent files sorted in reverse-chrono
                 pdfFiles.filter { it.path in recentPaths }.sortedBy { recentPaths.indexOf(it.path) }
             }
+            1 -> pdfFiles // All Files
             2 -> pdfFiles.filter { it.isFavorite } // Favorites
             else -> pdfFiles
         }
@@ -3162,7 +3958,11 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(filteredFiles) { file ->
-                        PdfFileGridItem(file = file, onOpenFile = onOpenFile)
+                        PdfFileGridItem(
+                            file = file,
+                            onOpenFile = onOpenFile,
+                            onMoreClicked = { onMoreClicked(file) }
+                        )
                     }
                 }
             } else {
@@ -3173,7 +3973,11 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filteredFiles) { file ->
-                        PdfFileRow(file = file, onOpenFile = onOpenFile)
+                        PdfFileRow(
+                            file = file,
+                            onOpenFile = onOpenFile,
+                            onMoreClicked = { onMoreClicked(file) }
+                        )
                     }
                 }
             }
@@ -3184,7 +3988,8 @@ fun HomeScreen(
 @Composable
 fun FoldersScreen(
     pdfFiles: List<PdfFileItem>,
-    onOpenFile: (PdfFileItem) -> Unit
+    onOpenFile: (PdfFileItem) -> Unit,
+    onMoreClicked: (PdfFileItem) -> Unit
 ) {
     val foldersMap = remember(pdfFiles) {
         pdfFiles.groupBy { file ->
@@ -3228,7 +4033,11 @@ fun FoldersScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(filesInFolder) { file ->
-                    PdfFileRow(file = file, onOpenFile = onOpenFile)
+                    PdfFileRow(
+                        file = file,
+                        onOpenFile = onOpenFile,
+                        onMoreClicked = { onMoreClicked(file) }
+                    )
                 }
             }
         }
@@ -3677,12 +4486,9 @@ fun ToolCard(
 @Composable
 fun PdfFileRow(
     file: PdfFileItem,
-    onOpenFile: (PdfFileItem) -> Unit
+    onOpenFile: (PdfFileItem) -> Unit,
+    onMoreClicked: () -> Unit
 ) {
-    val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
-    var isFav by remember(file.isFavorite) { mutableStateOf(file.isFavorite) }
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -3696,18 +4502,18 @@ fun PdfFileRow(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
+            IconButton(
+                onClick = onMoreClicked,
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(44.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF2B2B36)),
-                contentAlignment = Alignment.Center
+                    .background(Color(0xFF2B2B36))
             ) {
                 Icon(
-                    imageVector = Icons.Default.PictureAsPdf,
-                    contentDescription = null,
-                    tint = Color(0xFFEF5350),
-                    modifier = Modifier.size(28.dp)
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "المزيد من الخيارات",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
                 )
             }
             
@@ -3721,38 +4527,71 @@ fun PdfFileRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                
                 Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
-                        text = if (file.pages > 1) "${file.pages} صفحة" else "1 صفحة",
+                        text = formatDate(file.dateModified),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray
+                        color = Color.Gray,
+                        fontSize = 11.sp
                     )
                     Text(
-                        text = "  •  ",
+                        text = "•",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
+                    
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0x22D0BCFF), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = formatSize(file.size),
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color(0xFFD0BCFF),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = Color.Gray.copy(alpha = 0.7f),
+                        modifier = Modifier.size(12.dp)
                     )
                     Text(
-                        text = formatSize(file.size),
+                        text = getParentFolderName(file.path),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray
+                        color = Color.Gray,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            IconButton(
-                onClick = {
-                    isFav = !isFav
-                    sharedPrefs.edit().putBoolean("fav_${file.name}", isFav).apply()
-                }
-            ) {
-                Icon(
-                    imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "تفضيل",
-                    tint = if (isFav) Color.Red else Color.LightGray
-                )
-            }
+            Spacer(modifier = Modifier.width(12.dp))
+
+            PdfThumbnailView(
+                path = file.path,
+                modifier = Modifier
+                    .size(width = 54.dp, height = 68.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
         }
     }
 }
@@ -3760,12 +4599,9 @@ fun PdfFileRow(
 @Composable
 fun PdfFileGridItem(
     file: PdfFileItem,
-    onOpenFile: (PdfFileItem) -> Unit
+    onOpenFile: (PdfFileItem) -> Unit,
+    onMoreClicked: () -> Unit
 ) {
-    val context = LocalContext.current
-    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
-    var isFav by remember(file.isFavorite) { mutableStateOf(file.isFavorite) }
-
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -3781,28 +4617,28 @@ fun PdfFileGridItem(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(90.dp)
+                    .height(110.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF2B2B36)),
-                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = Icons.Default.PictureAsPdf,
-                    contentDescription = null,
-                    tint = Color(0xFFEF5350),
-                    modifier = Modifier.size(42.dp)
+                PdfThumbnailView(
+                    path = file.path,
+                    modifier = Modifier.fillMaxSize()
                 )
+                
                 IconButton(
-                    onClick = {
-                        isFav = !isFav
-                        sharedPrefs.edit().putBoolean("fav_${file.name}", isFav).apply()
-                    },
-                    modifier = Modifier.align(Alignment.TopEnd)
+                    onClick = onMoreClicked,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x991E1E24))
                 ) {
                     Icon(
-                        imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "تفضيل",
-                        tint = if (isFav) Color.Red else Color.White
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "المزيد من الخيارات",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
@@ -3825,15 +4661,23 @@ fun PdfFileGridItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (file.pages > 1) "${file.pages} صفحة" else "1 صفحة",
+                    text = formatDate(file.dateModified),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.LightGray
+                    color = Color.Gray,
+                    fontSize = 10.sp
                 )
-                Text(
-                    text = formatSize(file.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.LightGray
-                )
+                Box(
+                    modifier = Modifier
+                        .background(Color(0x22D0BCFF), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = formatSize(file.size),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color(0xFFD0BCFF),
+                        fontSize = 9.sp
+                    )
+                }
             }
         }
     }
