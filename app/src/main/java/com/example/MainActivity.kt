@@ -41,6 +41,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -59,6 +60,9 @@ import androidx.core.content.FileProvider
 import com.example.ui.theme.MyApplicationTheme
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -88,31 +92,76 @@ class MainActivity : ComponentActivity() {
                         executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.scrollMode = $mode; }")
                     },
                     onSearch = { query ->
+                        val encodedQuery = android.net.Uri.encode(query)
                         executeJs("""
                             if (typeof PDFViewerApplication !== 'undefined') {
-                                var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController;
-                                if (fc) {
-                                    fc.executeCommand('find', { query: '$query', phraseSearch: true, caseSensitive: false, entireWord: false, highlightAll: true, findPrevious: false });
+                                var decodedQuery = decodeURIComponent('$encodedQuery');
+                                var options = {
+                                    query: decodedQuery,
+                                    phraseSearch: false,
+                                    caseSensitive: false,
+                                    entireWord: false,
+                                    highlightAll: true,
+                                    findPrevious: false,
+                                    type: ''
+                                };
+                                if (PDFViewerApplication.eventBus) {
+                                    PDFViewerApplication.eventBus.dispatch('find', options);
+                                } else {
+                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                    if (fc) {
+                                        fc.executeCommand('find', options);
+                                    }
                                 }
                             }
                         """.trimIndent())
                     },
                     onSearchNext = { query ->
+                        val encodedQuery = android.net.Uri.encode(query)
                         executeJs("""
                             if (typeof PDFViewerApplication !== 'undefined') {
-                                var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController;
-                                if (fc) {
-                                    fc.executeCommand('findagain', { query: '$query', phraseSearch: true, caseSensitive: false, entireWord: false, highlightAll: true, findPrevious: false });
+                                var decodedQuery = decodeURIComponent('$encodedQuery');
+                                var options = {
+                                    query: decodedQuery,
+                                    phraseSearch: false,
+                                    caseSensitive: false,
+                                    entireWord: false,
+                                    highlightAll: true,
+                                    findPrevious: false,
+                                    type: 'again'
+                                };
+                                if (PDFViewerApplication.eventBus) {
+                                    PDFViewerApplication.eventBus.dispatch('findagain', options);
+                                } else {
+                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                    if (fc) {
+                                        fc.executeCommand('findagain', options);
+                                    }
                                 }
                             }
                         """.trimIndent())
                     },
                     onSearchPrev = { query ->
+                        val encodedQuery = android.net.Uri.encode(query)
                         executeJs("""
                             if (typeof PDFViewerApplication !== 'undefined') {
-                                var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController;
-                                if (fc) {
-                                    fc.executeCommand('findagain', { query: '$query', phraseSearch: true, caseSensitive: false, entireWord: false, highlightAll: true, findPrevious: true });
+                                var decodedQuery = decodeURIComponent('$encodedQuery');
+                                var options = {
+                                    query: decodedQuery,
+                                    phraseSearch: false,
+                                    caseSensitive: false,
+                                    entireWord: false,
+                                    highlightAll: true,
+                                    findPrevious: true,
+                                    type: 'again'
+                                };
+                                if (PDFViewerApplication.eventBus) {
+                                    PDFViewerApplication.eventBus.dispatch('findagain', options);
+                                } else {
+                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                    if (fc) {
+                                        fc.executeCommand('findagain', options);
+                                    }
                                 }
                             }
                         """.trimIndent())
@@ -120,9 +169,22 @@ class MainActivity : ComponentActivity() {
                     onClearSearch = {
                         executeJs("""
                             if (typeof PDFViewerApplication !== 'undefined') {
-                                var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController;
-                                if (fc) {
-                                    fc.executeCommand('find', { query: '', highlightAll: false });
+                                var options = {
+                                    query: '',
+                                    phraseSearch: false,
+                                    caseSensitive: false,
+                                    entireWord: false,
+                                    highlightAll: false,
+                                    findPrevious: false,
+                                    type: ''
+                                };
+                                if (PDFViewerApplication.eventBus) {
+                                    PDFViewerApplication.eventBus.dispatch('find', options);
+                                } else {
+                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                    if (fc) {
+                                        fc.executeCommand('find', options);
+                                    }
                                 }
                             }
                         """.trimIndent())
@@ -141,7 +203,9 @@ class MainActivity : ComponentActivity() {
 
     private fun copyAssetToCache(context: Context, assetName: String) {
         try {
-            val cacheFile = File(context.cacheDir, "temp.pdf")
+            val safeFileName = getSafePdfFileName(assetName)
+            val cacheFile = File(context.cacheDir, safeFileName)
+            if (cacheFile.exists()) return // Already copied
             context.assets.open(assetName).use { inputStream ->
                 FileOutputStream(cacheFile).use { outputStream ->
                     inputStream.copyTo(outputStream)
@@ -203,6 +267,7 @@ fun PDFReaderScreen(
     var totalPages by remember { mutableStateOf(1) }
     var currentScale by remember { mutableStateOf(1.0f) }
     var pdfName by remember { mutableStateOf("sample.pdf") }
+    var isCopying by remember { mutableStateOf(false) }
 
     // Search state
     var isSearching by remember { mutableStateOf(false) }
@@ -348,13 +413,14 @@ fun PDFReaderScreen(
     // Save copy of cached PDF to Downloads
     fun savePdfCopy(context: Context): Boolean {
         return try {
-            val cacheFile = File(context.cacheDir, "temp.pdf")
+            val safeFileName = getSafePdfFileName(pdfName)
+            val cacheFile = File(context.cacheDir, safeFileName)
             if (!cacheFile.exists()) return false
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
                 val contentValues = android.content.ContentValues().apply {
-                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "Reader_Pro_${pdfName.replace(" ", "_")}")
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "Reader_Pro_${safeFileName}")
                     put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
                     put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
                 }
@@ -372,7 +438,7 @@ fun PDFReaderScreen(
                 }
             } else {
                 val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                val targetFile = File(downloadsDir, "Reader_Pro_${pdfName.replace(" ", "_")}")
+                val targetFile = File(downloadsDir, "Reader_Pro_${safeFileName}")
                 cacheFile.inputStream().use { inputStream ->
                     targetFile.outputStream().use { outputStream ->
                         inputStream.copyTo(outputStream)
@@ -389,7 +455,8 @@ fun PDFReaderScreen(
     // Share PDF document using declared FileProvider
     fun sharePdf(context: Context) {
         try {
-            val cacheFile = File(context.cacheDir, "temp.pdf")
+            val safeFileName = getSafePdfFileName(pdfName)
+            val cacheFile = File(context.cacheDir, safeFileName)
             if (!cacheFile.exists()) {
                 Toast.makeText(context, "No active document to share", Toast.LENGTH_SHORT).show()
                 return
@@ -442,25 +509,35 @@ fun PDFReaderScreen(
             .apply()
     }
 
+    val scope = rememberCoroutineScope()
+
     // Launcher for selecting external PDFs
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { selectedUri ->
-            val success = copyUriToCache(context, selectedUri)
-            if (success) {
-                pdfName = getFileNameFromUri(context, selectedUri) ?: "External Document.pdf"
-                currentPage = 1
-                totalPages = 1
-                isSearching = false
-                searchQuery = ""
-                currentMatch = 0
-                totalMatches = 0
-                isAutoScrolling = false
-                reloadTrigger++
-                Toast.makeText(context, "Loaded: $pdfName", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "Failed to load PDF file", Toast.LENGTH_SHORT).show()
+            isCopying = true
+            scope.launch {
+                val originalName = getFileNameFromUri(context, selectedUri) ?: "External Document.pdf"
+                val safeFileName = getSafePdfFileName(originalName)
+                val success = withContext(Dispatchers.IO) {
+                    copyUriToCache(context, selectedUri, safeFileName)
+                }
+                isCopying = false
+                if (success) {
+                    pdfName = originalName
+                    currentPage = 1
+                    totalPages = 1
+                    isSearching = false
+                    searchQuery = ""
+                    currentMatch = 0
+                    totalMatches = 0
+                    isAutoScrolling = false
+                    reloadTrigger++
+                    Toast.makeText(context, "Loaded: $pdfName", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Failed to load PDF file", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -505,7 +582,9 @@ fun PDFReaderScreen(
                                 onPageChanged = { page, total ->
                                     post {
                                         currentPage = page
-                                        totalPages = total
+                                        if (total > 0) {
+                                            totalPages = total
+                                        }
                                     }
                                 },
                                 onScaleChanged = { scale ->
@@ -552,17 +631,21 @@ fun PDFReaderScreen(
                                             initialized = true;
                                             try {
                                                 if (typeof AndroidBridge !== 'undefined') {
-                                                    AndroidBridge.onPageChanged(PDFViewerApplication.page, PDFViewerApplication.pagesCount);
-                                                    AndroidBridge.onScaleChanged(PDFViewerApplication.pdfViewer.currentScale);
+                                                    var initialPage = (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.page) ? PDFViewerApplication.page : 1;
+                                                    var initialTotal = (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pagesCount) ? PDFViewerApplication.pagesCount : 0;
+                                                    var initialScale = (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) ? PDFViewerApplication.pdfViewer.currentScale : 1.0;
+                                                    AndroidBridge.onPageChanged(initialPage, initialTotal);
+                                                    AndroidBridge.onScaleChanged(initialScale);
                                                 }
                                                 
                                                 PDFViewerApplication.eventBus.on('pagechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined') {
-                                                        AndroidBridge.onPageChanged(e.pageNumber, e.pagesCount);
+                                                        var total = e.pagesCount || (typeof PDFViewerApplication !== 'undefined' ? PDFViewerApplication.pagesCount : 0) || 0;
+                                                        AndroidBridge.onPageChanged(e.pageNumber, total);
                                                     }
                                                 });
                                                 PDFViewerApplication.eventBus.on('scalechanging', function(e) {
-                                                    if (typeof AndroidBridge !== 'undefined') {
+                                                    if (typeof AndroidBridge !== 'undefined' && e.scale) {
                                                         AndroidBridge.onScaleChanged(e.scale);
                                                     }
                                                 });
@@ -610,7 +693,9 @@ fun PDFReaderScreen(
                         }
 
                         // Load Mozilla PDFjs with cached copy
-                        loadUrl("file:///android_asset/pdfjs/web/viewer.html?file=file://${ctx.cacheDir.absolutePath}/temp.pdf")
+                        val safeFileName = getSafePdfFileName(pdfName)
+                        val encodedName = android.net.Uri.encode(safeFileName)
+                        loadUrl("file:///android_asset/pdfjs/web/viewer.html?file=file://${ctx.cacheDir.absolutePath}/$encodedName")
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -645,6 +730,8 @@ fun PDFReaderScreen(
                             onClick = {
                                 isSearching = false
                                 searchQuery = ""
+                                currentMatch = 0
+                                totalMatches = 0
                                 onClearSearch()
                             },
                             modifier = Modifier.testTag("close_search_button")
@@ -663,6 +750,8 @@ fun PDFReaderScreen(
                                 if (it.isNotEmpty()) {
                                     onSearch(it)
                                 } else {
+                                    currentMatch = 0
+                                    totalMatches = 0
                                     onClearSearch()
                                 }
                             },
@@ -1645,6 +1734,42 @@ fun PDFReaderScreen(
                 }
             }
         }
+
+        if (isCopying) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .pointerInput(Unit) {},
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "جاري فتح الملف...",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1774,10 +1899,10 @@ private fun DocumentInfoTextItem(
     }
 }
 
-// Helper to copy selected Uri contents to the internal temp cache
-private fun copyUriToCache(context: Context, uri: Uri): Boolean {
+// Helper to copy selected Uri contents to the internal cache under a safe filename
+private fun copyUriToCache(context: Context, uri: Uri, safeFileName: String): Boolean {
     return try {
-        val cacheFile = File(context.cacheDir, "temp.pdf")
+        val cacheFile = File(context.cacheDir, safeFileName)
         if (cacheFile.exists()) {
             cacheFile.delete()
         }
@@ -1791,6 +1916,11 @@ private fun copyUriToCache(context: Context, uri: Uri): Boolean {
         e.printStackTrace()
         false
     }
+}
+
+private fun getSafePdfFileName(originalName: String): String {
+    val sanitized = originalName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+    return if (sanitized.endsWith(".pdf", ignoreCase = true)) sanitized else "$sanitized.pdf"
 }
 
 // Helper to query file name from Uri
