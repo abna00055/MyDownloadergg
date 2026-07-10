@@ -1257,6 +1257,82 @@ fun PDFReaderScreen(
                                                     }
                                                 }, { passive: true });
 
+                                                // Helper to find the parent .page element
+                                                function getPageElement(node) {
+                                                    var el = node;
+                                                    while (el && el !== document.body) {
+                                                        if (el.classList && el.classList.contains('page')) {
+                                                            return el;
+                                                        }
+                                                        el = el.parentNode;
+                                                    }
+                                                    return null;
+                                                }
+
+                                                // Helper to find the last text node inside a container
+                                                function getLastTextNode(container) {
+                                                    if (!container) return null;
+                                                    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+                                                    var lastNode = null;
+                                                    while (walker.nextNode()) {
+                                                        lastNode = walker.currentNode;
+                                                    }
+                                                    return lastNode;
+                                                }
+
+                                                // Prevent selection from spanning across multiple pages
+                                                document.addEventListener('selectstart', function(e) {
+                                                    var target = e.target;
+                                                    var page = getPageElement(target);
+                                                    if (page) {
+                                                        var pageNum = page.getAttribute('data-page-number');
+                                                        if (pageNum) {
+                                                            // Disable user-select on all other pages
+                                                            var pages = document.querySelectorAll('.page');
+                                                            pages.forEach(function(p) {
+                                                                if (p.getAttribute('data-page-number') !== pageNum) {
+                                                                    p.style.userSelect = 'none';
+                                                                    p.style.webkitUserSelect = 'none';
+                                                                } else {
+                                                                    p.style.userSelect = 'text';
+                                                                    p.style.webkitUserSelect = 'text';
+                                                                }
+                                                            });
+                                                        }
+                                                    }
+                                                });
+
+                                                document.addEventListener('selectionchange', function() {
+                                                    var sel = window.getSelection();
+                                                    if (!sel || sel.isCollapsed) {
+                                                        // Restore user-select when selection is cleared
+                                                        var pages = document.querySelectorAll('.page');
+                                                        pages.forEach(function(p) {
+                                                            p.style.userSelect = 'text';
+                                                            p.style.webkitUserSelect = 'text';
+                                                        });
+                                                    } else if (sel.rangeCount > 0) {
+                                                        var range = sel.getRangeAt(0);
+                                                        var startPage = getPageElement(range.startContainer);
+                                                        var endPage = getPageElement(range.endContainer);
+                                                        if (startPage && endPage && startPage !== endPage) {
+                                                            var textLayer = startPage.querySelector('.textLayer');
+                                                            if (textLayer) {
+                                                                var newRange = document.createRange();
+                                                                newRange.setStart(range.startContainer, range.startOffset);
+                                                                var lastTextNode = getLastTextNode(textLayer);
+                                                                if (lastTextNode) {
+                                                                    newRange.setEnd(lastTextNode, lastTextNode.length);
+                                                                } else {
+                                                                    newRange.setEnd(textLayer, textLayer.childNodes.length);
+                                                                }
+                                                                sel.removeAllRanges();
+                                                                sel.addRange(newRange);
+                                                            }
+                                                        }
+                                                    }
+                                                });
+
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
                                                     var target = e.target;
