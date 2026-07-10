@@ -61,6 +61,11 @@ import androidx.core.content.FileProvider
 import com.example.ui.theme.MyApplicationTheme
 import java.io.File
 import java.io.FileOutputStream
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import android.media.MediaPlayer
 import android.media.AudioManager
 import kotlinx.coroutines.delay
@@ -227,7 +232,8 @@ class PdfAndroidBridge(
     private val onPageChanged: (page: Int, total: Int) -> Unit,
     private val onScaleChanged: (scale: Float) -> Unit,
     private val onSearchMatchesChanged: (current: Int, total: Int) -> Unit,
-    private val onLinkClicked: (url: String, text: String) -> Unit
+    private val onLinkClicked: (url: String, text: String) -> Unit,
+    private val onDocumentClicked: () -> Unit
 ) {
     @JavascriptInterface
     fun onPageChanged(pageNumber: Int, pagesCount: Int) {
@@ -247,6 +253,11 @@ class PdfAndroidBridge(
     @JavascriptInterface
     fun onLinkClicked(url: String, text: String) {
         onLinkClicked.invoke(url, text)
+    }
+
+    @JavascriptInterface
+    fun onDocumentClicked() {
+        onDocumentClicked.invoke()
     }
 }
 
@@ -270,6 +281,15 @@ fun PDFReaderScreen(
     val context = LocalContext.current
     val activity = context as? ComponentActivity
     val scope = rememberCoroutineScope()
+
+    val window = activity?.window
+    val windowInsetsController = remember(window) {
+        if (window != null) {
+            androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        } else {
+            null
+        }
+    }
 
     // SharedPreferences for Bookmarks & Favorites
     val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
@@ -306,11 +326,14 @@ fun PDFReaderScreen(
                cleanUrl.endsWith(".ogg") || 
                cleanUrl.endsWith(".m4a") || 
                cleanUrl.endsWith(".aac") ||
-               cleanUrl.contains("/audio/") || 
-               cleanUrl.contains("/pronunciation/") || 
-               cleanUrl.contains("/sound/") ||
-               cleanUrl.contains("audio_") ||
-               cleanUrl.contains("pronounce")
+               cleanUrl.contains("audio") || 
+               cleanUrl.contains("pronounce") || 
+               cleanUrl.contains("pronunciation") || 
+               cleanUrl.contains("sound") ||
+               cleanUrl.contains("voice") ||
+               cleanUrl.contains("translate_tts") ||
+               cleanUrl.contains("speech") ||
+               cleanUrl.contains("tts")
     }
 
     fun playAudio(url: String, text: String) {
@@ -394,6 +417,14 @@ fun PDFReaderScreen(
     var isSnapToPage by remember { mutableStateOf(false) }
     var isDoubleSpread by remember { mutableStateOf(false) }
     var currentTheme by remember { mutableStateOf("light") } // "light", "dark", "sepia", "eyecare"
+
+    LaunchedEffect(currentTheme, windowInsetsController) {
+        windowInsetsController?.let { controller ->
+            val isLightBackground = currentTheme != "dark"
+            controller.isAppearanceLightStatusBars = isLightBackground
+            controller.isAppearanceLightNavigationBars = isLightBackground
+        }
+    }
 
     // Auto-Scroll States
     var isAutoScrolling by remember { mutableStateOf(false) }
@@ -719,6 +750,11 @@ fun PDFReaderScreen(
                                             activeWebUrl = url
                                         }
                                     }
+                                },
+                                onDocumentClicked = {
+                                    post {
+                                        isBarsVisible = !isBarsVisible
+                                    }
                                 }
                             ),
                             "AndroidBridge"
@@ -780,10 +816,15 @@ fun PDFReaderScreen(
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
                                                     var target = e.target;
-                                                    while (target && target.tagName !== 'A') {
+                                                    var isLink = false;
+                                                    while (target) {
+                                                        if (target.tagName === 'A' && target.getAttribute('href')) {
+                                                            isLink = true;
+                                                            break;
+                                                        }
                                                         target = target.parentNode;
                                                     }
-                                                    if (target && target.getAttribute('href')) {
+                                                    if (isLink) {
                                                         var href = target.getAttribute('href');
                                                         var text = target.textContent || target.innerText || "";
                                                         if (href && href.trim().length > 0 && !href.startsWith('#') && !href.startsWith('javascript:')) {
@@ -792,6 +833,10 @@ fun PDFReaderScreen(
                                                             if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onLinkClicked) {
                                                                 AndroidBridge.onLinkClicked(href, text.trim());
                                                             }
+                                                        }
+                                                    } else {
+                                                        if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
+                                                            AndroidBridge.onDocumentClicked();
                                                         }
                                                     }
                                                 }, true);
@@ -1169,33 +1214,49 @@ fun PDFReaderScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = { isAutoScrolling = !isAutoScrolling },
-                                colors = IconButtonDefaults.iconButtonColors(
-                                    containerColor = if (isAutoScrolling) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = if (isAutoScrolling) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = "Play/Pause Auto Scroll",
-                                    tint = if (isAutoScrolling) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { isAutoScrolling = !isAutoScrolling },
+                                    colors = IconButtonDefaults.iconButtonColors(
+                                        containerColor = if (isAutoScrolling) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = if (isAutoScrolling) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = "Play/Pause Auto Scroll",
+                                        tint = if (isAutoScrolling) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = if (isAutoScrolling) "Auto Scroll Active" else "Auto Scroll Inactive",
+                                    style = MaterialTheme.typography.bodyMedium
                                 )
                             }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = if (isAutoScrolling) "Auto Scroll Active" else "Auto Scroll Inactive",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
                         }
 
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         // Speed indicators (Slow, Med, Fast)
-                        Row {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start
+                        ) {
+                            Text(
+                                text = "Scroll Speed:",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(end = 12.dp)
+                            )
                             listOf(1 to "Slow", 2 to "Med", 3 to "Fast").forEach { (speed, label) ->
                                 Button(
                                     onClick = { autoScrollSpeed = speed },
@@ -1204,12 +1265,12 @@ fun PDFReaderScreen(
                                         contentColor = if (autoScrollSpeed == speed) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                                     ),
                                     shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                                     modifier = Modifier
-                                        .padding(start = 4.dp)
+                                        .padding(end = 6.dp)
                                         .height(32.dp)
                                 ) {
-                                    Text(text = label, fontSize = 11.sp)
+                                    Text(text = label, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1697,48 +1758,55 @@ fun PDFReaderScreen(
                                             modifier = Modifier
                                                 .aspectRatio(0.75f)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(
-                                                    if (isCurrent) MaterialTheme.colorScheme.primaryContainer
-                                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                                .border(
+                                                    width = if (isCurrent) 2.dp else 1.dp,
+                                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.12f),
+                                                    shape = RoundedCornerShape(8.dp)
                                                 )
                                                 .clickable {
                                                     onGoToPage(pageNum)
                                                     activeSheet = null
                                                 }
-                                                .padding(6.dp)
                                         ) {
-                                            Column(
-                                                modifier = Modifier.fillMaxSize(),
-                                                verticalArrangement = Arrangement.SpaceBetween,
-                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            // Real PDF page thumbnail rendered via system PdfRenderer
+                                            PdfPageThumbnail(
+                                                pageNum = pageNum,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+
+                                            // Text overlay with page index and bookmark status at bottom
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .align(Alignment.BottomCenter)
+                                                    .background(
+                                                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))
+                                                        )
+                                                    )
+                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
                                             ) {
-                                                // Icon row inside thumbnail representation
                                                 Row(
                                                     modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.End
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
+                                                    Text(
+                                                        text = "$pageNum",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color.White
+                                                    )
+                                                    
                                                     if (isBookmarked) {
                                                         Icon(
                                                             imageVector = Icons.Default.Bookmark,
                                                             contentDescription = "Bookmarked",
                                                             tint = Color(0xFFFFB300),
-                                                            modifier = Modifier.size(14.dp)
+                                                            modifier = Modifier.size(12.dp)
                                                         )
                                                     }
                                                 }
-
-                                                Text(
-                                                    text = "$pageNum",
-                                                    fontSize = 18.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                                )
-
-                                                Text(
-                                                    text = "Page $pageNum",
-                                                    fontSize = 10.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
                                             }
                                         }
                                     }
@@ -1918,7 +1986,12 @@ fun PDFReaderScreen(
             exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 16.dp, start = 24.dp, end = 24.dp)
+                .statusBarsPadding()
+                .padding(
+                    top = if (isBarsVisible) 90.dp else 16.dp,
+                    start = 24.dp,
+                    end = 24.dp
+                )
                 .zIndex(25f)
         ) {
             Card(
@@ -1960,7 +2033,7 @@ fun PDFReaderScreen(
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
                         ) {
                             Icon(
-                                imageVector = if (isAudioPlayingState) Icons.Default.PlayArrow else Icons.Default.PlayArrow,
+                                imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = "تشغيل/إيقاف مؤقت",
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp)
@@ -2317,4 +2390,85 @@ private fun getFileNameFromUri(context: Context, uri: Uri): String? {
         e.printStackTrace()
     }
     return name ?: uri.lastPathSegment
+}
+
+@Composable
+fun PdfPageThumbnail(pageNum: Int, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var hasError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pageNum) {
+        withContext(Dispatchers.IO) {
+            val file = File(context.cacheDir, "current_reader_doc.pdf")
+            if (file.exists()) {
+                var pfd: ParcelFileDescriptor? = null
+                var renderer: PdfRenderer? = null
+                var page: PdfRenderer.Page? = null
+                try {
+                    pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                    if (pfd != null) {
+                        renderer = PdfRenderer(pfd)
+                        val zeroIndexedPage = pageNum - 1
+                        if (zeroIndexedPage >= 0 && zeroIndexedPage < renderer.pageCount) {
+                            page = renderer.openPage(zeroIndexedPage)
+                            val targetWidth = 150
+                            val targetHeight = 200
+                            val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+                            val canvas = android.graphics.Canvas(bitmap)
+                            canvas.drawColor(android.graphics.Color.WHITE)
+                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            thumbnailBitmap = bitmap
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    hasError = true
+                } finally {
+                    try { page?.close() } catch (e: Exception) {}
+                    try { renderer?.close() } catch (e: Exception) {}
+                    try { pfd?.close() } catch (e: Exception) {}
+                }
+            } else {
+                hasError = true
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        val bitmap = thumbnailBitmap
+        if (bitmap != null) {
+            androidx.compose.foundation.Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "الصفحة $pageNum",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = 0.05f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Description,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "$pageNum",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
+            }
+        }
+    }
 }
