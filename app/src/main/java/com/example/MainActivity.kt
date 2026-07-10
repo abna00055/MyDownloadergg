@@ -950,7 +950,7 @@ fun PDFReaderScreen(
                             databaseEnabled = true
                             useWideViewPort = true
                             loadWithOverviewMode = true
-                            builtInZoomControls = true
+                            builtInZoomControls = false
                             displayZoomControls = false
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
@@ -1088,6 +1088,9 @@ fun PDFReaderScreen(
                                                     if (!window.minPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
                                                         window.minPdfScale = PDFViewerApplication.pdfViewer.currentScale;
                                                     }
+                                                    if (!window.initialPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
+                                                        window.initialPdfScale = PDFViewerApplication.pdfViewer.currentScale;
+                                                    }
                                                     forceRenderCheck();
                                                 });
                                                 
@@ -1111,6 +1114,117 @@ fun PDFReaderScreen(
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
                                                     }
                                                 });
+
+                                                // Custom gesture and tap handling
+                                                function isInteractive(element) {
+                                                    var el = element;
+                                                    while (el) {
+                                                        if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.tagName === 'INPUT' || (el.classList && el.classList.contains('clickable'))) {
+                                                            return true;
+                                                        }
+                                                        el = el.parentNode;
+                                                    }
+                                                    return false;
+                                                }
+
+                                                function handleDoubleTap() {
+                                                    if (typeof PDFViewerApplication === 'undefined' || !PDFViewerApplication.pdfViewer) return;
+                                                    var viewer = PDFViewerApplication.pdfViewer;
+                                                    var current = viewer.currentScale;
+                                                    
+                                                    var baseScale = window.initialPdfScale || window.minPdfScale || 1.0;
+                                                    var targetScale = baseScale * 1.5;
+                                                    
+                                                    if (Math.abs(current - targetScale) < 0.15 || current > baseScale * 1.2) {
+                                                        viewer.currentScale = baseScale;
+                                                    } else {
+                                                        viewer.currentScale = targetScale;
+                                                    }
+                                                }
+
+                                                var lastTapTime = 0;
+                                                var singleTapTimeout = null;
+                                                var startTouchX = 0, startTouchY = 0;
+                                                var initialPinchDist = 0;
+                                                var initialPinchScale = 1.0;
+                                                var isPinching = false;
+
+                                                document.addEventListener('touchstart', function(e) {
+                                                    if (e.touches.length === 2) {
+                                                        isPinching = true;
+                                                        initialPinchDist = Math.hypot(
+                                                            e.touches[0].clientX - e.touches[1].clientX,
+                                                            e.touches[0].clientY - e.touches[1].clientY
+                                                        );
+                                                        if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
+                                                            initialPinchScale = PDFViewerApplication.pdfViewer.currentScale || 1.0;
+                                                        }
+                                                        e.preventDefault();
+                                                    } else if (e.touches.length === 1) {
+                                                        var touch = e.touches[0];
+                                                        startTouchX = touch.clientX;
+                                                        startTouchY = touch.clientY;
+                                                    }
+                                                }, { passive: false });
+
+                                                document.addEventListener('touchmove', function(e) {
+                                                    if (e.touches.length === 2 && isPinching) {
+                                                        e.preventDefault();
+                                                        var currentDist = Math.hypot(
+                                                            e.touches[0].clientX - e.touches[1].clientX,
+                                                            e.touches[0].clientY - e.touches[1].clientY
+                                                        );
+                                                        if (initialPinchDist > 0 && typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
+                                                            var factor = currentDist / initialPinchDist;
+                                                            var newScale = initialPinchScale * factor;
+                                                            
+                                                            var minS = window.initialPdfScale || window.minPdfScale || 0.5;
+                                                            var maxS = 4.0;
+                                                            if (newScale < minS) newScale = minS;
+                                                            if (newScale > maxS) newScale = maxS;
+                                                            
+                                                            PDFViewerApplication.pdfViewer.currentScale = newScale;
+                                                        }
+                                                    }
+                                                }, { passive: false });
+
+                                                document.addEventListener('touchend', function(e) {
+                                                    if (isPinching && e.touches.length < 2) {
+                                                        isPinching = false;
+                                                    }
+                                                    if (e.changedTouches.length === 1 && !isPinching) {
+                                                        var touch = e.changedTouches[0];
+                                                        var endX = touch.clientX;
+                                                        var endY = touch.clientY;
+                                                        
+                                                        if (Math.hypot(endX - startTouchX, endY - startTouchY) < 15) {
+                                                            var target = touch.target || e.target;
+                                                            if (isInteractive(target)) {
+                                                                return;
+                                                            }
+                                                            
+                                                            var now = Date.now();
+                                                            var delay = now - lastTapTime;
+                                                            
+                                                            if (delay < 300) {
+                                                                if (singleTapTimeout) {
+                                                                    clearTimeout(singleTapTimeout);
+                                                                    singleTapTimeout = null;
+                                                                }
+                                                                handleDoubleTap();
+                                                                lastTapTime = 0;
+                                                            } else {
+                                                                lastTapTime = now;
+                                                                singleTapTimeout = setTimeout(function() {
+                                                                    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
+                                                                        AndroidBridge.onDocumentClicked();
+                                                                    }
+                                                                    singleTapTimeout = null;
+                                                                }, 250);
+                                                            }
+                                                        }
+                                                    }
+                                                }, { passive: true });
 
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
@@ -1147,11 +1261,8 @@ fun PDFReaderScreen(
                                                             e.stopPropagation();
                                                             if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onLinkClicked) {
                                                                 AndroidBridge.onLinkClicked(href, text.trim());
+                                                                return;
                                                             }
-                                                        }
-                                                    } else {
-                                                        if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
-                                                            AndroidBridge.onDocumentClicked();
                                                         }
                                                     }
                                                 }, true);
@@ -3895,6 +4006,7 @@ fun MainNavigationScreen(
     Scaffold(
         bottomBar = {
             NavigationBar(
+                modifier = Modifier.height(60.dp),
                 containerColor = Color(0xFF1E293B),
                 contentColor = Color.White
             ) {
@@ -3910,14 +4022,6 @@ fun MainNavigationScreen(
                                 imageVector = icons[index],
                                 contentDescription = label,
                                 tint = if (selectedTab == index) Color(0xFF06B6D4) else Color.Gray
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = label,
-                                color = if (selectedTab == index) Color(0xFF06B6D4) else Color.Gray,
-                                fontSize = 11.sp,
-                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
