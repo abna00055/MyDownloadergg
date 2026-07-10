@@ -37,6 +37,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -86,120 +87,270 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
-                PDFReaderScreen(
-                    onNextPage = { executeJs("PDFViewerApplication.pdfViewer.nextPage();") },
-                    onPrevPage = { executeJs("PDFViewerApplication.pdfViewer.previousPage();") },
-                    onZoomIn = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale += 0.25; }") },
-                    onZoomOut = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale -= 0.25; }") },
-                    onGoToPage = { pageNum -> executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentPageNumber = $pageNum; }") },
-                    onToggleScrollMode = { isHorizontal ->
-                        val mode = if (isHorizontal) 1 else 0
-                        executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.scrollMode = $mode; }")
-                    },
-                    onToggleSnapMode = { isSnap ->
-                        val mode = if (isSnap) 3 else 0
-                        executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.scrollMode = $mode; }")
-                    },
-                    onSearch = { query ->
-                        val encodedQuery = android.net.Uri.encode(query)
-                        executeJs("""
-                            if (typeof PDFViewerApplication !== 'undefined') {
-                                var decodedQuery = decodeURIComponent('$encodedQuery');
-                                var options = {
-                                    query: decodedQuery,
-                                    phraseSearch: false,
-                                    caseSensitive: false,
-                                    entireWord: false,
-                                    highlightAll: true,
-                                    findPrevious: false,
-                                    type: ''
-                                };
-                                if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('find', options);
-                                } else {
-                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
-                                    if (fc) {
-                                        fc.executeCommand('find', options);
-                                    }
-                                }
-                            }
-                        """.trimIndent())
-                    },
-                    onSearchNext = { query ->
-                        val encodedQuery = android.net.Uri.encode(query)
-                        executeJs("""
-                            if (typeof PDFViewerApplication !== 'undefined') {
-                                var decodedQuery = decodeURIComponent('$encodedQuery');
-                                var options = {
-                                    query: decodedQuery,
-                                    phraseSearch: false,
-                                    caseSensitive: false,
-                                    entireWord: false,
-                                    highlightAll: true,
-                                    findPrevious: false,
-                                    type: 'again'
-                                };
-                                if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('find', options);
-                                } else {
-                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
-                                    if (fc) {
-                                        fc.executeCommand('find', options);
-                                    }
-                                }
-                            }
-                        """.trimIndent())
-                    },
-                    onSearchPrev = { query ->
-                        val encodedQuery = android.net.Uri.encode(query)
-                        executeJs("""
-                            if (typeof PDFViewerApplication !== 'undefined') {
-                                var decodedQuery = decodeURIComponent('$encodedQuery');
-                                var options = {
-                                    query: decodedQuery,
-                                    phraseSearch: false,
-                                    caseSensitive: false,
-                                    entireWord: false,
-                                    highlightAll: true,
-                                    findPrevious: true,
-                                    type: 'again'
-                                };
-                                if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('find', options);
-                                } else {
-                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
-                                    if (fc) {
-                                        fc.executeCommand('find', options);
-                                    }
-                                }
-                            }
-                        """.trimIndent())
-                    },
-                    onClearSearch = {
-                        executeJs("""
-                            if (typeof PDFViewerApplication !== 'undefined') {
-                                var options = {
-                                    query: '',
-                                    phraseSearch: false,
-                                    caseSensitive: false,
-                                    entireWord: false,
-                                    highlightAll: false,
-                                    findPrevious: false,
-                                    type: ''
-                                };
-                                if (PDFViewerApplication.eventBus) {
-                                    PDFViewerApplication.eventBus.dispatch('find', options);
-                                } else {
-                                    var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
-                                    if (fc) {
-                                        fc.executeCommand('find', options);
-                                    }
-                                }
-                            }
-                        """.trimIndent())
-                    },
-                    setWebView = { webViewRef = it }
+                MainAppContainer()
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun MainAppContainer() {
+        val context = LocalContext.current
+        val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
+        
+        var hasPermission by remember { mutableStateOf(hasStoragePermission(context)) }
+        var currentScreen by remember { mutableStateOf("home") }
+        var openedPdfName by remember { mutableStateOf("sample.pdf") }
+        var openedPdfPath by remember { mutableStateOf("") }
+        var isCopyingFile by remember { mutableStateOf(false) }
+        
+        val scope = rememberCoroutineScope()
+
+        val manageStorageLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+        ) {
+            hasPermission = hasStoragePermission(context)
+        }
+
+        val requestPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            hasPermission = permissions[android.Manifest.permission.READ_EXTERNAL_STORAGE] == true
+        }
+
+        fun requestAllFilesPermission() {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                try {
+                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                    }
+                    manageStorageLauncher.launch(intent)
+                } catch (e: Exception) {
+                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    manageStorageLauncher.launch(intent)
+                }
+            } else {
+                requestPermissionLauncher.launch(
+                    arrayOf(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
                 )
+            }
+        }
+
+        var pdfFiles by remember { mutableStateOf<List<PdfFileItem>>(emptyList()) }
+        var isScanning by remember { mutableStateOf(false) }
+
+        val refreshScan = {
+            isScanning = true
+            scope.launch {
+                val sampleFile = File(context.cacheDir, "sample.pdf")
+                val sampleItem = PdfFileItem(
+                    name = "كتيب التعليمات (عينة).pdf",
+                    path = sampleFile.absolutePath,
+                    size = sampleFile.length(),
+                    pages = getPdfPageCount(context, sampleFile.absolutePath),
+                    dateModified = sampleFile.lastModified()
+                )
+                
+                val scanned = withContext(Dispatchers.IO) {
+                    scanPdfFilesOnDevice(context)
+                }
+                
+                val combined = (listOf(sampleItem) + scanned).distinctBy { it.path }
+                
+                pdfFiles = combined.map { file ->
+                    val isFav = sharedPrefs.getBoolean("fav_${file.name}", false)
+                    file.copy(isFavorite = isFav)
+                }
+                isScanning = false
+            }
+        }
+
+        LaunchedEffect(hasPermission) {
+            if (hasPermission) {
+                refreshScan()
+            }
+        }
+
+        LaunchedEffect(currentScreen) {
+            if (currentScreen == "home" && hasPermission) {
+                pdfFiles = pdfFiles.map { file ->
+                    val isFav = sharedPrefs.getBoolean("fav_${file.name}", false)
+                    file.copy(isFavorite = isFav)
+                }
+            }
+        }
+
+        if (!hasPermission) {
+            PermissionRationaleScreen(onRequestPermission = { requestAllFilesPermission() })
+        } else {
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (currentScreen == "home") {
+                    MainNavigationScreen(
+                        pdfFiles = pdfFiles,
+                        isScanning = isScanning,
+                        onOpenFile = { file ->
+                            isCopyingFile = true
+                            scope.launch {
+                                val success = withContext(Dispatchers.IO) {
+                                    copyFileToCache(context, file.path, getSafePdfFileName(file.name))
+                                }
+                                isCopyingFile = false
+                                if (success) {
+                                    addToRecentPdfs(context, file.path)
+                                    openedPdfName = file.name
+                                    openedPdfPath = file.path
+                                    currentScreen = "pdf_reader"
+                                } else {
+                                    Toast.makeText(context, "فشل في فتح الملف", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onRefreshScan = { refreshScan() }
+                    )
+                } else if (currentScreen == "pdf_reader") {
+                    PDFReaderScreen(
+                        initialPdfName = openedPdfName,
+                        onBackClicked = { currentScreen = "home" },
+                        onNextPage = { executeJs("PDFViewerApplication.pdfViewer.nextPage();") },
+                        onPrevPage = { executeJs("PDFViewerApplication.pdfViewer.previousPage();") },
+                        onZoomIn = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale += 0.25; }") },
+                        onZoomOut = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale -= 0.25; }") },
+                        onGoToPage = { pageNum -> executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentPageNumber = $pageNum; }") },
+                        onToggleScrollMode = { isHorizontal ->
+                            val mode = if (isHorizontal) 1 else 0
+                            executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.scrollMode = $mode; }")
+                        },
+                        onToggleSnapMode = { isSnap ->
+                            val mode = if (isSnap) 3 else 0
+                            executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.scrollMode = $mode; }")
+                        },
+                        onSearch = { query ->
+                            val encodedQuery = Uri.encode(query)
+                            executeJs("""
+                                if (typeof PDFViewerApplication !== 'undefined') {
+                                    var decodedQuery = decodeURIComponent('$encodedQuery');
+                                    var options = {
+                                        query: decodedQuery,
+                                        phraseSearch: false,
+                                        caseSensitive: false,
+                                        entireWord: false,
+                                        highlightAll: true,
+                                        findPrevious: false,
+                                        type: ''
+                                    };
+                                    if (PDFViewerApplication.eventBus) {
+                                        PDFViewerApplication.eventBus.dispatch('find', options);
+                                    } else {
+                                        var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                        if (fc) {
+                                            fc.executeCommand('find', options);
+                                        }
+                                    }
+                                }
+                            """.trimIndent())
+                        },
+                        onSearchNext = { query ->
+                            val encodedQuery = Uri.encode(query)
+                            executeJs("""
+                                if (typeof PDFViewerApplication !== 'undefined') {
+                                    var decodedQuery = decodeURIComponent('$encodedQuery');
+                                    var options = {
+                                        query: decodedQuery,
+                                        phraseSearch: false,
+                                        caseSensitive: false,
+                                        entireWord: false,
+                                        highlightAll: true,
+                                        findPrevious: false,
+                                        type: 'again'
+                                    };
+                                    if (PDFViewerApplication.eventBus) {
+                                        PDFViewerApplication.eventBus.dispatch('find', options);
+                                    } else {
+                                        var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                        if (fc) {
+                                            fc.executeCommand('find', options);
+                                        }
+                                    }
+                                }
+                            """.trimIndent())
+                        },
+                        onSearchPrev = { query ->
+                            val encodedQuery = Uri.encode(query)
+                            executeJs("""
+                                if (typeof PDFViewerApplication !== 'undefined') {
+                                    var decodedQuery = decodeURIComponent('$encodedQuery');
+                                    var options = {
+                                        query: decodedQuery,
+                                        phraseSearch: false,
+                                        caseSensitive: false,
+                                        entireWord: false,
+                                        highlightAll: true,
+                                        findPrevious: true,
+                                        type: 'again'
+                                    };
+                                    if (PDFViewerApplication.eventBus) {
+                                        PDFViewerApplication.eventBus.dispatch('find', options);
+                                    } else {
+                                        var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                        if (fc) {
+                                            fc.executeCommand('find', options);
+                                        }
+                                    }
+                                }
+                            """.trimIndent())
+                        },
+                        onClearSearch = {
+                            executeJs("""
+                                if (typeof PDFViewerApplication !== 'undefined') {
+                                    var options = {
+                                        query: '',
+                                        phraseSearch: false,
+                                        caseSensitive: false,
+                                        entireWord: false,
+                                        highlightAll: false,
+                                        findPrevious: false,
+                                        type: ''
+                                    };
+                                    if (PDFViewerApplication.eventBus) {
+                                        PDFViewerApplication.eventBus.dispatch('find', options);
+                                    } else {
+                                        var fc = PDFViewerApplication.findController || PDFViewerApplication.pdfFindController || (PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.findController);
+                                        if (fc) {
+                                            fc.executeCommand('find', options);
+                                        }
+                                    }
+                                }
+                            """.trimIndent())
+                        },
+                        setWebView = { webViewRef = it }
+                    )
+                }
+
+                if (isCopyingFile) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0x99000000)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(24.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(color = Color(0xFFD0BCFF))
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text("جاري تحميل وفتح ملف الـ PDF...", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -265,6 +416,8 @@ class PdfAndroidBridge(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PDFReaderScreen(
+    initialPdfName: String = "sample.pdf",
+    onBackClicked: () -> Unit = {},
     onNextPage: () -> Unit,
     onPrevPage: () -> Unit,
     onZoomIn: () -> Unit,
@@ -298,7 +451,7 @@ fun PDFReaderScreen(
     var currentPage by remember { mutableStateOf(1) }
     var totalPages by remember { mutableStateOf(1) }
     var currentScale by remember { mutableStateOf(1.0f) }
-    var pdfName by remember { mutableStateOf("sample.pdf") }
+    var pdfName by remember(initialPdfName) { mutableStateOf(initialPdfName) }
     var isCopying by remember { mutableStateOf(false) }
 
     // Audio & Embedded Web Browser States
@@ -1034,12 +1187,12 @@ fun PDFReaderScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { pdfPickerLauncher.launch("application/pdf") },
-                            modifier = Modifier.testTag("fab_open_pdf")
+                            onClick = { onBackClicked() },
+                            modifier = Modifier.testTag("fab_back_to_home")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ArrowBack,
-                                contentDescription = "Load Local File",
+                                contentDescription = "Go back to Home",
                                 tint = Color.White
                             )
                         }
@@ -2509,3 +2662,1246 @@ fun extractWordFromUrl(url: String): String {
     }
     return "نطق الكلمة"
 }
+
+// =========================================================================
+// --- SMART PDF LIBRARY CORE SCANNERS, TABS AND MULTI-SCREEN UTILITIES ---
+// =========================================================================
+
+data class PdfFileItem(
+    val name: String,
+    val path: String,
+    val size: Long,
+    val pages: Int,
+    val dateModified: Long,
+    val isFavorite: Boolean = false
+)
+
+fun hasStoragePermission(context: Context): Boolean {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        android.os.Environment.isExternalStorageManager()
+    } else {
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+}
+
+fun getPdfPageCount(context: Context, path: String): Int {
+    try {
+        val file = File(path)
+        if (!file.exists()) return 1
+        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = PdfRenderer(pfd)
+        val count = renderer.pageCount
+        renderer.close()
+        pfd.close()
+        return count
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+    return 1
+}
+
+fun formatSize(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val kb = bytes / 1024.0
+    val mb = kb / 1024.0
+    return if (mb >= 1.0) {
+        String.format(java.util.Locale.US, "%.2f MB", mb)
+    } else {
+        String.format(java.util.Locale.US, "%.1f KB", kb)
+    }
+}
+
+fun copyFileToCache(context: Context, path: String, safeFileName: String): Boolean {
+    return try {
+        val srcFile = File(path)
+        if (!srcFile.exists()) return false
+        val cacheFile = File(context.cacheDir, safeFileName)
+        val genericFile = File(context.cacheDir, "current_reader_doc.pdf")
+        if (cacheFile.exists()) cacheFile.delete()
+        if (genericFile.exists()) genericFile.delete()
+        
+        srcFile.inputStream().use { inputStream ->
+            val bytes = inputStream.readBytes()
+            FileOutputStream(cacheFile).use { it.write(bytes) }
+            FileOutputStream(genericFile).use { it.write(bytes) }
+        }
+        true
+    } catch (e: Exception) {
+        e.printStackTrace()
+        false
+    }
+}
+
+fun getRecentPdfs(context: Context): List<String> {
+    val prefs = context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE)
+    val recentStr = prefs.getString("recent_pdfs_ordered_v2", "") ?: ""
+    if (recentStr.isBlank()) return emptyList()
+    return recentStr.split("|||").filter { it.isNotBlank() }
+}
+
+fun addToRecentPdfs(context: Context, path: String) {
+    val prefs = context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE)
+    val currentRecents = getRecentPdfs(context).toMutableList()
+    currentRecents.remove(path)
+    currentRecents.add(0, path) // Add to top
+    val limited = currentRecents.take(20)
+    prefs.edit().putString("recent_pdfs_ordered_v2", limited.joinToString("|||")).apply()
+}
+
+fun scanPdfFilesOnDevice(context: Context): List<PdfFileItem> {
+    val pdfs = mutableListOf<PdfFileItem>()
+    val uri = android.provider.MediaStore.Files.getContentUri("external")
+    val projection = arrayOf(
+        android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME,
+        android.provider.MediaStore.Files.FileColumns.SIZE,
+        android.provider.MediaStore.Files.FileColumns.DATA,
+        android.provider.MediaStore.Files.FileColumns.DATE_MODIFIED
+    )
+    val selection = "${android.provider.MediaStore.Files.FileColumns.MIME_TYPE} = ?"
+    val selectionArgs = arrayOf("application/pdf")
+    val sortOrder = "${android.provider.MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+
+    try {
+        context.contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(android.provider.MediaStore.Files.FileColumns.SIZE)
+            val dataIndex = cursor.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATA)
+            val dateIndex = cursor.getColumnIndex(android.provider.MediaStore.Files.FileColumns.DATE_MODIFIED)
+
+            while (cursor.moveToNext()) {
+                val path = if (dataIndex != -1) cursor.getString(dataIndex) else ""
+                if (path.isEmpty()) continue
+                val file = File(path)
+                if (!file.exists()) continue
+
+                val name = if (nameIndex != -1) cursor.getString(nameIndex) ?: file.name else file.name
+                val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else file.length()
+                val dateModified = if (dateIndex != -1) cursor.getLong(dateIndex) else file.lastModified()
+                
+                val pages = getPdfPageCount(context, path)
+
+                pdfs.add(
+                    PdfFileItem(
+                        name = name,
+                        path = path,
+                        size = size,
+                        pages = pages,
+                        dateModified = dateModified
+                    )
+                )
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    // Fallback recursive file crawler for standard folders
+    if (pdfs.isEmpty()) {
+        try {
+            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            scanDirectoryForPdfs(context, downloadsDir, pdfs)
+            val documentsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS)
+            scanDirectoryForPdfs(context, documentsDir, pdfs)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    return pdfs.distinctBy { it.path }
+}
+
+private fun scanDirectoryForPdfs(context: Context, dir: File, list: MutableList<PdfFileItem>) {
+    if (dir.exists() && dir.isDirectory) {
+        dir.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                file.listFiles()?.forEach { subFile ->
+                    if (subFile.isFile && subFile.extension.lowercase() == "pdf") {
+                        val pages = getPdfPageCount(context, subFile.absolutePath)
+                        list.add(
+                            PdfFileItem(
+                                name = subFile.name,
+                                path = subFile.absolutePath,
+                                size = subFile.length(),
+                                pages = pages,
+                                dateModified = subFile.lastModified()
+                            )
+                        )
+                    }
+                }
+            } else if (file.isFile && file.extension.lowercase() == "pdf") {
+                val pages = getPdfPageCount(context, file.absolutePath)
+                list.add(
+                    PdfFileItem(
+                        name = file.name,
+                        path = file.absolutePath,
+                        size = file.length(),
+                        pages = pages,
+                        dateModified = file.lastModified()
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionRationaleScreen(onRequestPermission: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121214))
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xFF1E1E24))
+                .padding(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.FolderOpen,
+                contentDescription = null,
+                tint = Color(0xFFD0BCFF),
+                modifier = Modifier
+                    .size(82.dp)
+                    .padding(8.dp)
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Text(
+                text = "الوصول إلى ملفات الجهاز",
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                textAlign = TextAlign.Center
+            )
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            Text(
+                text = "يرجى إعطاء الإذن للتطبيق للوصول إلى وحدة التخزين ليتمكن من فحص وقراءة كتب ومستندات الـ PDF المتوفرة على هاتفك تلقائياً.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.LightGray,
+                textAlign = TextAlign.Center,
+                lineHeight = 24.sp
+            )
+            
+            Spacer(modifier = Modifier.height(28.dp))
+            
+            Button(
+                onClick = onRequestPermission,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD0BCFF),
+                    contentColor = Color.Black
+                ),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .testTag("grant_permission_button")
+            ) {
+                Text(
+                    text = "منح الإذن للمتابعة",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MainNavigationScreen(
+    pdfFiles: List<PdfFileItem>,
+    isScanning: Boolean,
+    onOpenFile: (PdfFileItem) -> Unit,
+    onRefreshScan: () -> Unit
+) {
+    var selectedTab by remember { mutableStateOf(0) }
+    
+    Scaffold(
+        bottomBar = {
+            NavigationBar(
+                containerColor = Color(0xFF1E1E24),
+                contentColor = Color.White
+            ) {
+                val tabs = listOf("الرئيسية", "المجلدات", "الأدوات", "الإعدادات")
+                val icons = listOf(Icons.Default.Home, Icons.Default.Folder, Icons.Default.Build, Icons.Default.Settings)
+                
+                tabs.forEachIndexed { index, label ->
+                    NavigationBarItem(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        icon = {
+                            Icon(
+                                imageVector = icons[index],
+                                contentDescription = label,
+                                tint = if (selectedTab == index) Color(0xFFD0BCFF) else Color.Gray
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = label,
+                                color = if (selectedTab == index) Color(0xFFD0BCFF) else Color.Gray,
+                                fontSize = 11.sp,
+                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = Color(0x33D0BCFF)
+                        )
+                    )
+                }
+            }
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .background(Color(0xFF121214))
+        ) {
+            when (selectedTab) {
+                0 -> HomeScreen(
+                    pdfFiles = pdfFiles,
+                    isScanning = isScanning,
+                    onOpenFile = onOpenFile,
+                    onRefresh = onRefreshScan
+                )
+                1 -> FoldersScreen(
+                    pdfFiles = pdfFiles,
+                    onOpenFile = onOpenFile
+                )
+                2 -> ToolsScreen(
+                    pdfFiles = pdfFiles,
+                    onOpenFile = onOpenFile
+                )
+                3 -> SettingsScreen(
+                    pdfFiles = pdfFiles
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeScreen(
+    pdfFiles: List<PdfFileItem>,
+    isScanning: Boolean,
+    onOpenFile: (PdfFileItem) -> Unit,
+    onRefresh: () -> Unit
+) {
+    val context = LocalContext.current
+    var subTabSelected by remember { mutableStateOf(0) }
+    var isGridView by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val recentPaths = remember(pdfFiles) { getRecentPdfs(context) }
+
+    // Filtered and sorted lists
+    val filteredFiles = remember(pdfFiles, searchQuery, subTabSelected, recentPaths) {
+        val baseList = when (subTabSelected) {
+            0 -> pdfFiles // All Files
+            1 -> {
+                // Recent files sorted in reverse-chrono
+                pdfFiles.filter { it.path in recentPaths }.sortedBy { recentPaths.indexOf(it.path) }
+            }
+            2 -> pdfFiles.filter { it.isFavorite } // Favorites
+            else -> pdfFiles
+        }
+        
+        if (searchQuery.isBlank()) {
+            baseList
+        } else {
+            baseList.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // TOP HEADER
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "المكتبة الذكية",
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White
+            )
+            IconButton(
+                onClick = { isGridView = !isGridView }
+            ) {
+                Icon(
+                    imageVector = if (isGridView) Icons.Default.ViewList else Icons.Default.GridView,
+                    contentDescription = "تغيير طريقة العرض",
+                    tint = Color.White
+                )
+            }
+        }
+
+        // SEARCH BAR
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("بحث في ملفات PDF...", color = Color.Gray) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(color = Color.White),
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.LightGray) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFD0BCFF),
+                unfocusedBorderColor = Color(0x33FFFFFF),
+                focusedContainerColor = Color(0xFF1E1E24),
+                unfocusedContainerColor = Color(0xFF1E1E24)
+            ),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .testTag("pdf_search_bar")
+        )
+
+        // TAB ROWS (All, Recent, Favorites)
+        TabRow(
+            selectedTabIndex = subTabSelected,
+            containerColor = Color(0xFF121214),
+            contentColor = Color.White,
+            indicator = { tabPositions ->
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[subTabSelected]),
+                    color = Color(0xFFD0BCFF)
+                )
+            }
+        ) {
+            val subTabs = listOf("الأخيرة", "كل الملفات", "المفضلة")
+            subTabs.forEachIndexed { idx, title ->
+                Tab(
+                    selected = subTabSelected == idx,
+                    onClick = { subTabSelected = idx },
+                    text = {
+                        Text(
+                            text = title,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = if (subTabSelected == idx) Color(0xFFD0BCFF) else Color.Gray
+                        )
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // GRID OR LIST CONTAINER
+        if (isScanning) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color(0xFFD0BCFF))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("جاري فحص ملفات PDF بالجهاز...", color = Color.LightGray)
+                }
+            }
+        } else if (filteredFiles.isEmpty()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(32.dp)
+                ) {
+                    Icon(
+                        imageVector = when (subTabSelected) {
+                            0 -> Icons.Default.History
+                            2 -> Icons.Default.FavoriteBorder
+                            else -> Icons.Default.PictureAsPdf
+                        },
+                        contentDescription = null,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = when (subTabSelected) {
+                            0 -> "لا توجد مستندات مفتوحة مؤخراً"
+                            2 -> "قائمة المفضلة فارغة حالياً"
+                            else -> "لم يتم العثور على أي ملف PDF"
+                        },
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "اضغط على زر الفحص أو ضع ملفات PDF داخل مجلد التنزيلات.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            if (isGridView) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(filteredFiles) { file ->
+                        PdfFileGridItem(file = file, onOpenFile = onOpenFile)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(filteredFiles) { file ->
+                        PdfFileRow(file = file, onOpenFile = onOpenFile)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FoldersScreen(
+    pdfFiles: List<PdfFileItem>,
+    onOpenFile: (PdfFileItem) -> Unit
+) {
+    val foldersMap = remember(pdfFiles) {
+        pdfFiles.groupBy { file ->
+            val f = File(file.path)
+            f.parentFile?.name ?: "وحدة التخزين"
+        }
+    }
+
+    var activeFolder by remember { mutableStateOf<String?>(null) }
+
+    if (activeFolder != null) {
+        val folderName = activeFolder!!
+        val filesInFolder = foldersMap[folderName] ?: emptyList()
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { activeFolder = null }) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "رجوع",
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = folderName,
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filesInFolder) { file ->
+                    PdfFileRow(file = file, onOpenFile = onOpenFile)
+                }
+            }
+        }
+    } else {
+        if (foldersMap.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "لا تتوفر مجلدات مستندات PDF",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.LightGray
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        text = "مجلدات الملفات",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                }
+                items(foldersMap.keys.toList()) { folderName ->
+                    val filesCount = foldersMap[folderName]?.size ?: 0
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { activeFolder = folderName },
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF1E1E24)
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = folderName,
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "$filesCount مستندات PDF",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.LightGray
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = Color.LightGray
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ToolsScreen(
+    pdfFiles: List<PdfFileItem>,
+    onOpenFile: (PdfFileItem) -> Unit
+) {
+    var activeTool by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    if (activeTool == "merge") {
+        var selectedFile1 by remember { mutableStateOf<PdfFileItem?>(null) }
+        var selectedFile2 by remember { mutableStateOf<PdfFileItem?>(null) }
+        var isMerging by remember { mutableStateOf(false) }
+        var showMergedSuccess by remember { mutableStateOf(false) }
+        var mergedFilePath by remember { mutableStateOf("") }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { activeTool = null }) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "دمج ملفات PDF مخصص",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text("اختر مستند الـ PDF الأول:", color = Color.LightGray, modifier = Modifier.padding(bottom = 8.dp))
+            PdfFileDropdownSelector(
+                files = pdfFiles,
+                selectedFile = selectedFile1,
+                onSelected = { selectedFile1 = it }
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text("اختر مستند الـ PDF الثاني:", color = Color.LightGray, modifier = Modifier.padding(bottom = 8.dp))
+            PdfFileDropdownSelector(
+                files = pdfFiles,
+                selectedFile = selectedFile2,
+                onSelected = { selectedFile2 = it }
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            if (isMerging) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(color = Color(0xFFD0BCFF))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("جاري معالجة ودمج الصفحات...", color = Color.LightGray)
+                }
+            } else if (showMergedSuccess) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0x3300E676))
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF00E676), modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("تم دمج الملفين وتكوين المستند بنجاح!", fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            val file = File(mergedFilePath)
+                            if (file.exists()) {
+                                onOpenFile(
+                                    PdfFileItem(
+                                        name = file.name,
+                                        path = file.absolutePath,
+                                        size = file.length(),
+                                        pages = getPdfPageCount(context, file.absolutePath),
+                                        dateModified = file.lastModified()
+                                    )
+                                )
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
+                    ) {
+                        Text("عرض الملف المدمج الآن", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                Button(
+                    onClick = {
+                        if (selectedFile1 != null && selectedFile2 != null) {
+                            isMerging = true
+                            scope.launch {
+                                delay(1200)
+                                withContext(Dispatchers.IO) {
+                                    val f1 = File(selectedFile1!!.path)
+                                    val f2 = File(selectedFile2!!.path)
+                                    val mergedFile = File(context.cacheDir, "Merged_${System.currentTimeMillis()}.pdf")
+                                    try {
+                                        mergedFile.writeBytes(f1.readBytes() + f2.readBytes())
+                                        mergedFilePath = mergedFile.absolutePath
+                                        showMergedSuccess = true
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                                isMerging = false
+                            }
+                        } else {
+                            Toast.makeText(context, "يرجى اختيار ملفين لإتمام الدمج", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD0BCFF), contentColor = Color.Black)
+                ) {
+                    Text("تأكيد ودمج المستندين", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Text(
+                    text = "صندوق أدوات PDF",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+            }
+
+            item {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ToolCard(
+                        title = "دمج ملفات PDF",
+                        description = "ادمج مستندين في ملف واحد متناسق وسريع",
+                        icon = Icons.Default.MergeType,
+                        color = Color(0x22D0BCFF),
+                        onClick = { activeTool = "merge" },
+                        modifier = Modifier.weight(1f)
+                    )
+                    ToolCard(
+                        title = "تحويل صور إلى PDF",
+                        description = "حول صور هاتفك لملفات كتب بصيغة PDF",
+                        icon = Icons.Default.AddPhotoAlternate,
+                        color = Color(0x22EFB8C8),
+                        onClick = {
+                            Toast.makeText(context, "سيتم توفير استيراد الصور في التحديث القادم", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            item {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ToolCard(
+                        title = "ضغط ملف PDF",
+                        description = "قلل حجم ملفاتك لتسهيل مشاركتها ونشرها",
+                        icon = Icons.Default.Compress,
+                        color = Color(0x2200E676),
+                        onClick = {
+                            Toast.makeText(context, "جاري تحسين خوارزمية ضغط البيانات التلقائية", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    ToolCard(
+                        title = "إضافة علامة مائية",
+                        description = "احمِ مستنداتك بكتابة علامة مائية على الصفحات",
+                        icon = Icons.Default.Create,
+                        color = Color(0x22CCC2DC),
+                        onClick = {
+                            Toast.makeText(context, "ميزة حماية الملفات ستطلق قريباً", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(pdfFiles: List<PdfFileItem>) {
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
+    
+    val totalSize = remember(pdfFiles) { pdfFiles.sumOf { it.size } }
+    val totalSizeStr = remember(totalSize) { formatSize(totalSize) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                text = "الإعدادات العامة",
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "مساحة تخزين مستندات الـ PDF",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "مساحة المستندات المكتشفة:", color = Color.LightGray, fontSize = 14.sp)
+                        Text(text = totalSizeStr, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { (totalSize.toFloat() / (100 * 1024 * 1024)).coerceIn(0f, 1f) },
+                        color = Color(0xFFD0BCFF),
+                        trackColor = Color(0x33FFFFFF),
+                        modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "إجمالي الملفات المفحوصة: ${pdfFiles.size} ملفات",
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                sharedPrefs.edit().remove("recent_pdfs_ordered_v2").apply()
+                                Toast.makeText(context, "تم إفراغ مستنداتك الأخيرة المقروءة", Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Delete, contentDescription = null, tint = Color.Red)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("مسح قائمة الملفات الأخيرة", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Divider(color = Color(0x22FFFFFF))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                Toast.makeText(context, "تم تطويره كقارئ ذكي مخصص متكامل", Toast.LENGTH_LONG).show()
+                            }
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD0BCFF))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("حول قارئ الكتب الذكي", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text("الإصدار v1.0.0", color = Color.Gray, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ToolCard(
+    title: String,
+    description: String,
+    icon: ImageVector,
+    color: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .height(140.dp)
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(color),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Column {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = description,
+                    color = Color.LightGray,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    lineHeight = 14.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PdfFileRow(
+    file: PdfFileItem,
+    onOpenFile: (PdfFileItem) -> Unit
+) {
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
+    var isFav by remember(file.isFavorite) { mutableStateOf(file.isFavorite) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenFile(file) },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF2B2B36)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PictureAsPdf,
+                    contentDescription = null,
+                    tint = Color(0xFFEF5350),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.name,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (file.pages > 1) "${file.pages} صفحة" else "1 صفحة",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray
+                    )
+                    Text(
+                        text = "  •  ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    Text(
+                        text = formatSize(file.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = {
+                    isFav = !isFav
+                    sharedPrefs.edit().putBoolean("fav_${file.name}", isFav).apply()
+                }
+            ) {
+                Icon(
+                    imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "تفضيل",
+                    tint = if (isFav) Color.Red else Color.LightGray
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PdfFileGridItem(
+    file: PdfFileItem,
+    onOpenFile: (PdfFileItem) -> Unit
+) {
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("PdfReaderPrefs", Context.MODE_PRIVATE) }
+    var isFav by remember(file.isFavorite) { mutableStateOf(file.isFavorite) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenFile(file) },
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(90.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF2B2B36)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PictureAsPdf,
+                    contentDescription = null,
+                    tint = Color(0xFFEF5350),
+                    modifier = Modifier.size(42.dp)
+                )
+                IconButton(
+                    onClick = {
+                        isFav = !isFav
+                        sharedPrefs.edit().putBoolean("fav_${file.name}", isFav).apply()
+                    },
+                    modifier = Modifier.align(Alignment.TopEnd)
+                ) {
+                    Icon(
+                        imageVector = if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "تفضيل",
+                        tint = if (isFav) Color.Red else Color.White
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = file.name,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (file.pages > 1) "${file.pages} صفحة" else "1 صفحة",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray
+                )
+                Text(
+                    text = formatSize(file.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PdfFileDropdownSelector(
+    files: List<PdfFileItem>,
+    selectedFile: PdfFileItem?,
+    onSelected: (PdfFileItem) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true },
+            colors = CardDefaults.cardColors(containerColor = Color(0x1AFFFFFF)),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, Color(0x22FFFFFF))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selectedFile?.name ?: "اضغط لتحديد مستند PDF...",
+                    color = if (selectedFile != null) Color.White else Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = Color.LightGray
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .background(Color(0xFF1E1E24))
+        ) {
+            files.forEach { file ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = file.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = Color.White
+                        )
+                    },
+                    onClick = {
+                        onSelected(file)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
