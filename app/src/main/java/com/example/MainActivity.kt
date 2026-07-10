@@ -1008,21 +1008,13 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    body.selecting-active .page:not(.is-selecting) {
+                                    body.selecting-active .page:not(.is-selecting) .textLayer {
                                         user-select: none !important;
                                         -webkit-user-select: none !important;
                                     }
-                                    body.selecting-active .page:not(.is-selecting) * {
+                                    body.selecting-active .page:not(.is-selecting) .textLayer * {
                                         user-select: none !important;
                                         -webkit-user-select: none !important;
-                                    }
-                                    body.selecting-active .page.is-selecting {
-                                        user-select: text !important;
-                                        -webkit-user-select: text !important;
-                                    }
-                                    body.selecting-active .page.is-selecting * {
-                                        user-select: text !important;
-                                        -webkit-user-select: text !important;
                                     }
                                 """.trimIndent()
 
@@ -1165,6 +1157,7 @@ fun PDFReaderScreen(
                                                 var initialPinchScale = 1.0;
                                                 var isPinching = false;
                                                 var pinchFactor = 1.0;
+                                                var pagesToScale = [];
 
                                                 document.addEventListener('touchstart', function(e) {
                                                     if (e.touches.length === 2) {
@@ -1177,16 +1170,19 @@ fun PDFReaderScreen(
                                                         );
                                                         if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
                                                             initialPinchScale = PDFViewerApplication.pdfViewer.currentScale || 1.0;
+                                                            var activePageNum = PDFViewerApplication.pdfViewer.currentPageNumber || 1;
+                                                            pagesToScale = [];
+                                                            [-1, 0, 1].forEach(function(offset) {
+                                                                var pNum = activePageNum + offset;
+                                                                if (pNum >= 1 && pNum <= PDFViewerApplication.pagesCount) {
+                                                                    var pEl = document.querySelector('.page[data-page-number="' + pNum + '"]');
+                                                                    if (pEl) {
+                                                                        pagesToScale.push(pEl);
+                                                                    }
+                                                                }
+                                                            });
                                                         }
                                                         pinchFactor = 1.0;
-                                                        var viewer = document.getElementById('viewer');
-                                                        if (viewer) {
-                                                            var rect = viewer.getBoundingClientRect();
-                                                            var midX = ((t0.clientX + t1.clientX) / 2) - rect.left;
-                                                            var midY = ((t0.clientY + t1.clientY) / 2) - rect.top;
-                                                            viewer.style.transformOrigin = midX + 'px ' + midY + 'px';
-                                                            viewer.style.transition = 'none';
-                                                        }
                                                         e.preventDefault();
                                                     } else if (e.touches.length === 1) {
                                                         var touch = e.touches[0];
@@ -1209,10 +1205,11 @@ fun PDFReaderScreen(
                                                             if (pinchFactor < 0.4) pinchFactor = 0.4;
                                                             if (pinchFactor > 4.0) pinchFactor = 4.0;
                                                             
-                                                            var viewer = document.getElementById('viewer');
-                                                            if (viewer) {
-                                                                viewer.style.transform = 'scale(' + pinchFactor + ')';
-                                                            }
+                                                            pagesToScale.forEach(function(page) {
+                                                                page.style.transform = 'scale(' + pinchFactor + ')';
+                                                                page.style.transformOrigin = 'center center';
+                                                                page.style.zIndex = '9999';
+                                                            });
                                                         }
                                                     }
                                                 }, { passive: false });
@@ -1220,11 +1217,13 @@ fun PDFReaderScreen(
                                                 document.addEventListener('touchend', function(e) {
                                                     if (isPinching && e.touches.length < 2) {
                                                         isPinching = false;
-                                                        var viewer = document.getElementById('viewer');
-                                                        if (viewer) {
-                                                            viewer.style.transform = '';
-                                                            viewer.style.transformOrigin = '';
-                                                        }
+                                                        
+                                                        pagesToScale.forEach(function(page) {
+                                                            page.style.transform = '';
+                                                            page.style.transformOrigin = '';
+                                                            page.style.zIndex = '';
+                                                        });
+                                                        
                                                         if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer && pinchFactor !== 1.0) {
                                                             var newScale = initialPinchScale * pinchFactor;
                                                             var minS = window.initialPdfScale || window.minPdfScale || 0.5;
@@ -1238,6 +1237,7 @@ fun PDFReaderScreen(
                                                             setTimeout(forceRenderCheck, 400);
                                                         }
                                                         pinchFactor = 1.0;
+                                                        pagesToScale = [];
                                                     }
                                                     if (e.changedTouches.length === 1 && !isPinching) {
                                                         var touch = e.changedTouches[0];
