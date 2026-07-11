@@ -1017,7 +1017,7 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
+                                    .textLayer { pointer-events: none !important; }
                                     .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                 """.trimIndent()
 
@@ -1121,58 +1121,102 @@ fun PDFReaderScreen(
                                                 }
 
                                                 var lastTapTime = 0;
-                                                 var singleTapTimeout = null;
-                                                 var startTouchX = 0, startTouchY = 0;
+                                                var singleTapTimeout = null;
+                                                var startTouchX = 0, startTouchY = 0;
+                                                var wasPinching = false;
+                                                var pinchTimeout = null;
+                                                var wasSelecting = false;
+                                                var selectionTimeout = null;
 
-                                                 document.addEventListener('touchstart', function(e) {
-                                                     if (e.touches.length === 1) {
-                                                         var touch = e.touches[0];
-                                                         startTouchX = touch.clientX;
-                                                         startTouchY = touch.clientY;
-                                                     }
-                                                 }, { passive: true });
+                                                function isTextSelected() {
+                                                    var sel = window.getSelection();
+                                                    return sel && sel.toString().trim().length > 0;
+                                                }
 
-                                                 document.addEventListener('touchend', function(e) {
-                                                     if (e.changedTouches.length === 1) {
-                                                         // If there's an active text selection, do NOT trigger any tap / bars toggle!
-                                                         var selection = window.getSelection();
-                                                         if (selection && selection.toString().trim().length > 0) {
-                                                             return;
-                                                         }
+                                                // Listen to selection changes to lock/unlock standard behaviors
+                                                document.addEventListener('selectionchange', function() {
+                                                    if (isTextSelected()) {
+                                                        wasSelecting = true;
+                                                        if (selectionTimeout) clearTimeout(selectionTimeout);
+                                                    } else {
+                                                        if (selectionTimeout) clearTimeout(selectionTimeout);
+                                                        selectionTimeout = setTimeout(function() {
+                                                            wasSelecting = false;
+                                                            selectionTimeout = null;
+                                                        }, 500);
+                                                    }
+                                                });
 
-                                                         var touch = e.changedTouches[0];
-                                                         var endX = touch.clientX;
-                                                         var endY = touch.clientY;
-                                                         
-                                                         if (Math.hypot(endX - startTouchX, endY - startTouchY) < 15) {
-                                                             var target = touch.target || e.target;
-                                                             if (isInteractive(target)) {
-                                                                 return;
-                                                             }
-                                                             
-                                                             var now = Date.now();
-                                                             var delay = now - lastTapTime;
-                                                             
-                                                             if (delay < 300) {
-                                                                 if (singleTapTimeout) {
-                                                                     clearTimeout(singleTapTimeout);
-                                                                     singleTapTimeout = null;
-                                                                 }
-                                                                 // Let native double-tap zoom happen by not preventing default
-                                                                 lastTapTime = 0;
-                                                             } else {
-                                                                 lastTapTime = now;
-                                                                 singleTapTimeout = setTimeout(function() {
-                                                                     if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
-                                                                         AndroidBridge.onDocumentClicked();
-                                                                     }
-                                                                     singleTapTimeout = null;
-                                                                 }, 250);
-                                                             }
-                                                         }
-                                                     }
-                                                 }, { passive: true });
-                                                 
+                                                // Block all page scrolling/swiping when text selection is active to keep selection perfectly stable
+                                                document.addEventListener('touchmove', function(e) {
+                                                    if (isTextSelected()) {
+                                                        e.preventDefault();
+                                                    }
+                                                }, { passive: false });
+
+                                                document.addEventListener('touchstart', function(e) {
+                                                    if (e.touches.length > 1) {
+                                                        wasPinching = true;
+                                                        if (pinchTimeout) clearTimeout(pinchTimeout);
+                                                    }
+                                                    if (isTextSelected() || wasSelecting || wasPinching) {
+                                                        return;
+                                                    }
+                                                    if (e.touches.length === 1) {
+                                                        var touch = e.touches[0];
+                                                        startTouchX = touch.clientX;
+                                                        startTouchY = touch.clientY;
+                                                    }
+                                                }, { passive: true });
+
+                                                document.addEventListener('touchend', function(e) {
+                                                    if (wasPinching) {
+                                                        if (!pinchTimeout) {
+                                                            pinchTimeout = setTimeout(function() {
+                                                                wasPinching = false;
+                                                                pinchTimeout = null;
+                                                            }, 500);
+                                                        }
+                                                        return;
+                                                    }
+                                                    if (isTextSelected() || wasSelecting) {
+                                                        return;
+                                                    }
+
+                                                    if (e.changedTouches.length === 1) {
+                                                        var touch = e.changedTouches[0];
+                                                        var endX = touch.clientX;
+                                                        var endY = touch.clientY;
+                                                        
+                                                        if (Math.hypot(endX - startTouchX, endY - startTouchY) < 15) {
+                                                            var target = touch.target || e.target;
+                                                            if (isInteractive(target)) {
+                                                                return;
+                                                            }
+                                                            
+                                                            var now = Date.now();
+                                                            var delay = now - lastTapTime;
+                                                            
+                                                            if (delay < 300) {
+                                                                if (singleTapTimeout) {
+                                                                    clearTimeout(singleTapTimeout);
+                                                                    singleTapTimeout = null;
+                                                                }
+                                                                // Let native double-tap zoom happen natively
+                                                                lastTapTime = 0;
+                                                            } else {
+                                                                lastTapTime = now;
+                                                                singleTapTimeout = setTimeout(function() {
+                                                                    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
+                                                                        AndroidBridge.onDocumentClicked();
+                                                                    }
+                                                                    singleTapTimeout = null;
+                                                                }, 250);
+                                                            }
+                                                        }
+                                                    }
+                                                }, { passive: true });
+                                                
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
                                                     var target = e.target;
