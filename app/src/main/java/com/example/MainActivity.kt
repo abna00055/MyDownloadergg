@@ -750,6 +750,7 @@ fun PDFReaderScreen(
         }
         val spreadMode = if (isDouble) 1 else 0
         val script = """
+            window.isHorizontalScroll = $isHorizontal;
             if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
                 PDFViewerApplication.pdfViewer.scrollMode = $scrollMode;
                 PDFViewerApplication.pdfViewer.spreadMode = $spreadMode;
@@ -941,6 +942,7 @@ fun PDFReaderScreen(
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         setWebView(this)
                         settings.apply {
                             javaScriptEnabled = true
@@ -1008,14 +1010,6 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    body.selecting-active .page:not(.is-selecting) .textLayer {
-                                        user-select: none !important;
-                                        -webkit-user-select: none !important;
-                                    }
-                                    body.selecting-active .page:not(.is-selecting) .textLayer * {
-                                        user-select: none !important;
-                                        -webkit-user-select: none !important;
-                                    }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1042,45 +1036,11 @@ fun PDFReaderScreen(
                                                     AndroidBridge.onScaleChanged(initialScale);
                                                 }
                                                 
-                                                function forceRenderCheck() {
-                                                    try {
-                                                        if (typeof PDFViewerApplication === 'undefined' || !PDFViewerApplication.pdfViewer) return;
-                                                        var viewer = PDFViewerApplication.pdfViewer;
-                                                        var queue = viewer.renderingQueue;
-                                                        if (!queue) return;
-                                                        
-                                                        var currentPageNum = PDFViewerApplication.page || 1;
-                                                        var totalPages = viewer.pagesCount || 0;
-                                                        if (totalPages === 0) return;
-                                                        
-                                                        var pagesToRender = [currentPageNum, currentPageNum - 1, currentPageNum + 1];
-                                                        pagesToRender.forEach(function(p) {
-                                                            if (p >= 1 && p <= totalPages) {
-                                                                var view = viewer.getPageView(p - 1);
-                                                                if (view) {
-                                                                    if (view.renderingState === 0 || view.renderingState === 2) {
-                                                                        try {
-                                                                            queue.renderView(view);
-                                                                        } catch (e) {
-                                                                            console.error("Force rendering page " + p + " failed: ", e);
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        });
-                                                    } catch (err) {
-                                                        console.error("forceRenderCheck failed", err);
-                                                    }
-                                                }
-                                                
                                                 PDFViewerApplication.eventBus.on('pagechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined') {
                                                         var total = e.pagesCount || (typeof PDFViewerApplication !== 'undefined' ? PDFViewerApplication.pagesCount : 0) || 0;
                                                         AndroidBridge.onPageChanged(e.pageNumber, total);
                                                     }
-                                                    forceRenderCheck();
-                                                    setTimeout(forceRenderCheck, 150);
-                                                    setTimeout(forceRenderCheck, 400);
                                                 });
                                                 PDFViewerApplication.eventBus.on('scalechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.scale) {
@@ -1090,7 +1050,6 @@ fun PDFReaderScreen(
                                                             AndroidBridge.onScaleChanged(e.scale);
                                                         }
                                                     }
-                                                    forceRenderCheck();
                                                 });
                                                 PDFViewerApplication.eventBus.on('pagerendered', function(e) {
                                                     if (!window.minPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
@@ -1099,24 +1058,7 @@ fun PDFReaderScreen(
                                                     if (!window.initialPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
                                                         window.initialPdfScale = PDFViewerApplication.pdfViewer.currentScale;
                                                     }
-                                                    forceRenderCheck();
                                                 });
-                                                
-                                                var viewerContainer = document.getElementById('viewerContainer');
-                                                if (viewerContainer) {
-                                                    viewerContainer.addEventListener('scroll', function() {
-                                                        forceRenderCheck();
-                                                    });
-                                                }
-                                                
-                                                window.addEventListener('resize', function() {
-                                                    window.minPdfScale = null;
-                                                    forceRenderCheck();
-                                                });
-                                                
-                                                setTimeout(forceRenderCheck, 150);
-                                                setTimeout(forceRenderCheck, 600);
-                                                setTimeout(forceRenderCheck, 1500);
                                                 PDFViewerApplication.eventBus.on('updatefindmatchescount', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.matchesCount) {
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
@@ -1143,8 +1085,16 @@ fun PDFReaderScreen(
                                                     var baseScale = window.initialPdfScale || window.minPdfScale || 1.0;
                                                     var targetScale = baseScale * 1.5;
                                                     
-                                                    if (Math.abs(current - targetScale) < 0.15 || current > baseScale * 1.2) {
-                                                        viewer.currentScale = baseScale;
+                                                    if (Math.abs(current - targetScale) < 0.15 || current > baseScale * 1.15) {
+                                                        if (window.isHorizontalScroll) {
+                                                            viewer.currentScaleValue = 'page-fit';
+                                                        } else {
+                                                            viewer.currentScaleValue = 'page-width';
+                                                        }
+                                                        var container = document.getElementById('viewerContainer');
+                                                        if (container) {
+                                                            container.scrollLeft = 0;
+                                                        }
                                                     } else {
                                                         viewer.currentScale = targetScale;
                                                     }
@@ -1228,13 +1178,22 @@ fun PDFReaderScreen(
                                                             var newScale = initialPinchScale * pinchFactor;
                                                             var minS = window.initialPdfScale || window.minPdfScale || 0.5;
                                                             var maxS = 4.0;
-                                                            if (newScale < minS) newScale = minS;
-                                                            if (newScale > maxS) newScale = maxS;
                                                             
-                                                            PDFViewerApplication.pdfViewer.currentScale = newScale;
-                                                            forceRenderCheck();
-                                                            setTimeout(forceRenderCheck, 150);
-                                                            setTimeout(forceRenderCheck, 400);
+                                                            if (pinchFactor < 1.0 && newScale <= minS * 1.05) {
+                                                                if (window.isHorizontalScroll) {
+                                                                    PDFViewerApplication.pdfViewer.currentScaleValue = 'page-fit';
+                                                                } else {
+                                                                    PDFViewerApplication.pdfViewer.currentScaleValue = 'page-width';
+                                                                }
+                                                                var container = document.getElementById('viewerContainer');
+                                                                if (container) {
+                                                                    container.scrollLeft = 0;
+                                                                }
+                                                            } else {
+                                                                if (newScale < minS) newScale = minS;
+                                                                if (newScale > maxS) newScale = maxS;
+                                                                PDFViewerApplication.pdfViewer.currentScale = newScale;
+                                                            }
                                                         }
                                                         pinchFactor = 1.0;
                                                         pagesToScale = [];
@@ -1273,67 +1232,7 @@ fun PDFReaderScreen(
                                                     }
                                                 }, { passive: true });
 
-                                                // Helper to find the parent .page element
-                                                function getPageElement(node) {
-                                                    var el = node;
-                                                    while (el && el !== document.body) {
-                                                        if (el.classList && el.classList.contains('page')) {
-                                                            return el;
-                                                        }
-                                                        el = el.parentNode;
-                                                    }
-                                                    return null;
-                                                }
 
-                                                // Helper to find the last text node inside a container
-                                                function getLastTextNode(container) {
-                                                    if (!container) return null;
-                                                    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-                                                    var lastNode = null;
-                                                    while (walker.nextNode()) {
-                                                        lastNode = walker.currentNode;
-                                                    }
-                                                    return lastNode;
-                                                }
-
-                                                // Prevent selection from spanning across multiple pages
-                                                document.addEventListener('selectstart', function(e) {
-                                                    var target = e.target;
-                                                    var page = getPageElement(target);
-                                                    if (page) {
-                                                        var oldPages = document.querySelectorAll('.page.is-selecting');
-                                                        oldPages.forEach(function(p) {
-                                                            p.classList.remove('is-selecting');
-                                                        });
-                                                        page.classList.add('is-selecting');
-                                                        document.body.classList.add('selecting-active');
-                                                    }
-                                                });
-
-                                                document.addEventListener('selectionchange', function() {
-                                                    var sel = window.getSelection();
-                                                    if (!sel || sel.isCollapsed) {
-                                                        // Restore when selection is cleared
-                                                        document.body.classList.remove('selecting-active');
-                                                        var oldPages = document.querySelectorAll('.page.is-selecting');
-                                                        oldPages.forEach(function(p) {
-                                                            p.classList.remove('is-selecting');
-                                                        });
-                                                    } else if (sel.rangeCount > 0) {
-                                                        var range = sel.getRangeAt(0);
-                                                        var startPage = getPageElement(range.startContainer);
-                                                        
-                                                        // Auto-set active page if not already done via selectstart
-                                                        if (startPage && !startPage.classList.contains('is-selecting')) {
-                                                            var oldPages = document.querySelectorAll('.page.is-selecting');
-                                                            oldPages.forEach(function(p) {
-                                                                p.classList.remove('is-selecting');
-                                                            });
-                                                            startPage.classList.add('is-selecting');
-                                                            document.body.classList.add('selecting-active');
-                                                        }
-                                                    }
-                                                });
 
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
