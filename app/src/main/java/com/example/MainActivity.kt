@@ -1016,7 +1016,7 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }
+                                    .textLayer { pointer-events: none !important; }
                                     .textLayer span { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }
                                 """.trimIndent()
 
@@ -1116,6 +1116,28 @@ fun PDFReaderScreen(
                                                  var isPinching = false;
                                                  var pinchFactor = 1.0;
 
+                                                 function handleTouchMovePinch(e) {
+                                                     if (e.touches.length === 2 && isPinching) {
+                                                         e.preventDefault();
+                                                         var t0 = e.touches[0];
+                                                         var t1 = e.touches[1];
+                                                         var currentDist = Math.hypot(
+                                                             t0.clientX - t1.clientX,
+                                                             t0.clientY - t1.clientY
+                                                         );
+                                                         if (initialPinchDist > 0) {
+                                                             pinchFactor = currentDist / initialPinchDist;
+                                                             if (pinchFactor < 0.4) pinchFactor = 0.4;
+                                                             if (pinchFactor > 4.0) pinchFactor = 4.0;
+                                                             
+                                                             var viewer = document.getElementById('viewer');
+                                                             if (viewer) {
+                                                                 viewer.style.transform = 'scale(' + pinchFactor + ')';
+                                                             }
+                                                         }
+                                                     }
+                                                 }
+
                                                  document.addEventListener('touchstart', function(e) {
                                                      if (e.touches.length === 2) {
                                                          isPinching = true;
@@ -1139,6 +1161,10 @@ fun PDFReaderScreen(
                                                          }
                                                          
                                                          pinchFactor = 1.0;
+                                                         
+                                                         // Dynamically attach high-precision non-passive listener for pinching
+                                                         document.addEventListener('touchmove', handleTouchMovePinch, { passive: false });
+                                                         
                                                          e.preventDefault();
                                                      } else if (e.touches.length === 1) {
                                                          var touch = e.touches[0];
@@ -1147,31 +1173,12 @@ fun PDFReaderScreen(
                                                      }
                                                  }, { passive: false });
 
-                                                 document.addEventListener('touchmove', function(e) {
-                                                     if (e.touches.length === 2 && isPinching) {
-                                                         e.preventDefault();
-                                                         var t0 = e.touches[0];
-                                                         var t1 = e.touches[1];
-                                                         var currentDist = Math.hypot(
-                                                             t0.clientX - t1.clientX,
-                                                             t0.clientY - t1.clientY
-                                                         );
-                                                         if (initialPinchDist > 0) {
-                                                             pinchFactor = currentDist / initialPinchDist;
-                                                             if (pinchFactor < 0.4) pinchFactor = 0.4;
-                                                             if (pinchFactor > 4.0) pinchFactor = 4.0;
-                                                             
-                                                             var viewer = document.getElementById('viewer');
-                                                             if (viewer) {
-                                                                 viewer.style.transform = 'scale(' + pinchFactor + ')';
-                                                             }
-                                                         }
-                                                     }
-                                                 }, { passive: false });
-
                                                  document.addEventListener('touchend', function(e) {
                                                      if (isPinching && e.touches.length < 2) {
                                                          isPinching = false;
+                                                         
+                                                         // Clean up high-precision dynamic listener
+                                                         document.removeEventListener('touchmove', handleTouchMovePinch);
                                                          
                                                          var viewer = document.getElementById('viewer');
                                                          if (viewer) {
@@ -1203,6 +1210,12 @@ fun PDFReaderScreen(
                                                          }
                                                          pinchFactor = 1.0;
                                                      } else if (e.changedTouches.length === 1 && !isPinching) {
+                                                         // If there's an active text selection, do NOT trigger any tap / bars toggle!
+                                                         var selection = window.getSelection();
+                                                         if (selection && selection.toString().trim().length > 0) {
+                                                             return;
+                                                         }
+
                                                          var touch = e.changedTouches[0];
                                                          var endX = touch.clientX;
                                                          var endY = touch.clientY;
@@ -1234,7 +1247,21 @@ fun PDFReaderScreen(
                                                              }
                                                          }
                                                      }
-                                                 }, { passive: false });
+                                                 }, { passive: true });
+
+                                                 document.addEventListener('touchcancel', function(e) {
+                                                     if (isPinching) {
+                                                         isPinching = false;
+                                                         document.removeEventListener('touchmove', handleTouchMovePinch);
+                                                         var viewer = document.getElementById('viewer');
+                                                         if (viewer) {
+                                                             viewer.style.transform = '';
+                                                             viewer.style.transformOrigin = '';
+                                                             viewer.style.transition = '';
+                                                         }
+                                                         pinchFactor = 1.0;
+                                                     }
+                                                 }, { passive: true });
                                                  
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
