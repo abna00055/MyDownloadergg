@@ -544,6 +544,7 @@ fun PDFReaderScreen(
     var playingAudioUrl by remember { mutableStateOf<String?>(null) }
     var playingAudioText by remember { mutableStateOf("") }
     var isAudioPlayingState by remember { mutableStateOf(false) }
+    var isAudioPreparing by remember { mutableStateOf(false) }
     var audioProgress by remember { mutableStateOf(0.0f) }
     var audioDurationText by remember { mutableStateOf("0:00") }
     var audioPositionText by remember { mutableStateOf("0:00") }
@@ -580,6 +581,7 @@ fun PDFReaderScreen(
             mediaPlayer?.release()
             mediaPlayer = null
             isAudioPlayingState = false
+            isAudioPreparing = true
             audioProgress = 0.0f
             playingAudioUrl = url
             playingAudioText = text
@@ -588,20 +590,23 @@ fun PDFReaderScreen(
                 setAudioStreamType(AudioManager.STREAM_MUSIC)
                 setDataSource(url)
                 setOnPreparedListener {
+                    isAudioPreparing = false
                     it.start()
                     isAudioPlayingState = true
                 }
                 setOnCompletionListener {
+                    isAudioPreparing = false
                     isAudioPlayingState = false
                     audioProgress = 1.0f
                     scope.launch {
                         delay(1500)
-                        if (!isAudioPlayingState) {
+                        if (!isAudioPlayingState && !isAudioPreparing) {
                             playingAudioUrl = null
                         }
                     }
                 }
                 setOnErrorListener { _, _, _ ->
+                    isAudioPreparing = false
                     isAudioPlayingState = false
                     Toast.makeText(context, "خطأ في تشغيل الصوت", Toast.LENGTH_SHORT).show()
                     false
@@ -610,6 +615,7 @@ fun PDFReaderScreen(
             mediaPlayer = mp
             mp.prepareAsync()
         } catch (e: Exception) {
+            isAudioPreparing = false
             e.printStackTrace()
             Toast.makeText(context, "فشل تحميل ملف الصوت", Toast.LENGTH_SHORT).show()
         }
@@ -2532,30 +2538,40 @@ fun PDFReaderScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         // Play / Pause Button
-                        IconButton(
-                            onClick = {
-                                mediaPlayer?.let { mp ->
-                                    if (mp.isPlaying) {
-                                        mp.pause()
-                                        isAudioPlayingState = false
-                                    } else {
-                                        mp.start()
-                                        isAudioPlayingState = true
-                                    }
-                                } ?: run {
-                                    playingAudioUrl?.let { playAudio(it, playingAudioText) }
-                                }
-                            },
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(26.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                                .clip(CircleShape)
+                                .clickable {
+                                    mediaPlayer?.let { mp ->
+                                        if (mp.isPlaying) {
+                                            mp.pause()
+                                            isAudioPlayingState = false
+                                        } else {
+                                            mp.start()
+                                            isAudioPlayingState = true
+                                        }
+                                    } ?: run {
+                                        playingAudioUrl?.let { playAudio(it, playingAudioText) }
+                                    }
+                                }
                         ) {
-                            Icon(
-                                imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "تشغيل/إيقاف مؤقت",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            if (isAudioPreparing) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    strokeWidth = 1.5.dp,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = "تشغيل/إيقاف مؤقت",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
@@ -2593,42 +2609,49 @@ fun PDFReaderScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         // Replay/Repeat Button
-                        IconButton(
-                            onClick = { playingAudioUrl?.let { playAudio(it, playingAudioText) } },
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(26.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                                .clip(CircleShape)
+                                .clickable {
+                                    playingAudioUrl?.let { playAudio(it, playingAudioText) }
+                                }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "إعادة النطق",
                                 tint = Color.White,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(12.dp)
                             )
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
 
                         // Close/Dismiss Button (x)
-                        IconButton(
-                            onClick = {
-                                mediaPlayer?.stop()
-                                mediaPlayer?.release()
-                                mediaPlayer = null
-                                isAudioPlayingState = false
-                                playingAudioUrl = null
-                                playingAudioText = ""
-                                audioProgress = 0.0f
-                            },
+                        Box(
+                            contentAlignment = Alignment.Center,
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(26.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                                .clip(CircleShape)
+                                .clickable {
+                                    mediaPlayer?.stop()
+                                    mediaPlayer?.release()
+                                    mediaPlayer = null
+                                    isAudioPlayingState = false
+                                    isAudioPreparing = false
+                                    playingAudioUrl = null
+                                    playingAudioText = ""
+                                    audioProgress = 0.0f
+                                }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "إغلاق",
                                 tint = Color.White,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(12.dp)
                             )
                         }
                     }
