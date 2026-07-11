@@ -956,11 +956,11 @@ fun PDFReaderScreen(
                             allowContentAccess = true
                             domStorageEnabled = true
                             databaseEnabled = true
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            builtInZoomControls = true
+                            useWideViewPort = false
+                            loadWithOverviewMode = false
+                            builtInZoomControls = false
                             displayZoomControls = false
-                            setSupportZoom(true)
+                            setSupportZoom(false)
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -1017,7 +1017,7 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { pointer-events: none !important; }
+                                    .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                     .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                 """.trimIndent()
 
@@ -1147,12 +1147,6 @@ fun PDFReaderScreen(
                                                     }
                                                 });
 
-                                                // Block all page scrolling/swiping when text selection is active to keep selection perfectly stable
-                                                document.addEventListener('touchmove', function(e) {
-                                                    if (isTextSelected()) {
-                                                        e.preventDefault();
-                                                    }
-                                                }, { passive: false });
 
                                                 document.addEventListener('touchstart', function(e) {
                                                     if (e.touches.length > 1) {
@@ -1202,7 +1196,7 @@ fun PDFReaderScreen(
                                                                     clearTimeout(singleTapTimeout);
                                                                     singleTapTimeout = null;
                                                                 }
-                                                                // Let native double-tap zoom happen natively
+                                                                handleDoubleTap();
                                                                 lastTapTime = 0;
                                                             } else {
                                                                 lastTapTime = now;
@@ -5870,4 +5864,3 @@ fun PdfFileDropdownSelector(
         }
     }
 }
-
