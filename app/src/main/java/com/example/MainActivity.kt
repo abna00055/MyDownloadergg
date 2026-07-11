@@ -958,8 +958,9 @@ fun PDFReaderScreen(
                             databaseEnabled = true
                             useWideViewPort = true
                             loadWithOverviewMode = true
-                            builtInZoomControls = false
+                            builtInZoomControls = true
                             displayZoomControls = false
+                            setSupportZoom(true)
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -1016,8 +1017,8 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { pointer-events: none !important; }
-                                    .textLayer span { -webkit-user-select: text !important; user-select: text !important; pointer-events: auto !important; }
+                                    .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
+                                    .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1025,6 +1026,17 @@ fun PDFReaderScreen(
                                     style.type = 'text/css';
                                     style.innerHTML = `$css`;
                                     document.head.appendChild(style);
+                                    
+                                    // Ensure viewport allows native zoom and scaling perfectly
+                                    var meta = document.querySelector('meta[name="viewport"]');
+                                    if (meta) {
+                                        meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes');
+                                    } else {
+                                        meta = document.createElement('meta');
+                                        meta.name = 'viewport';
+                                        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+                                        document.head.appendChild(meta);
+                                    }
                                 """.trimIndent()
                                 view?.evaluateJavascript(styleInjection, null)
 
@@ -1111,105 +1123,17 @@ fun PDFReaderScreen(
                                                 var lastTapTime = 0;
                                                  var singleTapTimeout = null;
                                                  var startTouchX = 0, startTouchY = 0;
-                                                 var initialPinchDist = 0;
-                                                 var initialPinchScale = 1.0;
-                                                 var isPinching = false;
-                                                 var pinchFactor = 1.0;
-
-                                                 function handleTouchMovePinch(e) {
-                                                     if (e.touches.length === 2 && isPinching) {
-                                                         e.preventDefault();
-                                                         var t0 = e.touches[0];
-                                                         var t1 = e.touches[1];
-                                                         var currentDist = Math.hypot(
-                                                             t0.clientX - t1.clientX,
-                                                             t0.clientY - t1.clientY
-                                                         );
-                                                         if (initialPinchDist > 0) {
-                                                             pinchFactor = currentDist / initialPinchDist;
-                                                             if (pinchFactor < 0.4) pinchFactor = 0.4;
-                                                             if (pinchFactor > 4.0) pinchFactor = 4.0;
-                                                             
-                                                             var viewer = document.getElementById('viewer');
-                                                             if (viewer) {
-                                                                 viewer.style.transform = 'scale(' + pinchFactor + ')';
-                                                             }
-                                                         }
-                                                     }
-                                                 }
 
                                                  document.addEventListener('touchstart', function(e) {
-                                                     if (e.touches.length === 2) {
-                                                         isPinching = true;
-                                                         var t0 = e.touches[0];
-                                                         var t1 = e.touches[1];
-                                                         initialPinchDist = Math.hypot(
-                                                             t0.clientX - t1.clientX,
-                                                             t0.clientY - t1.clientY
-                                                         );
-                                                         if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
-                                                             initialPinchScale = PDFViewerApplication.pdfViewer.currentScale || 1.0;
-                                                         }
-                                                         
-                                                         var viewer = document.getElementById('viewer');
-                                                         if (viewer) {
-                                                             var rect = viewer.getBoundingClientRect();
-                                                             var midX = (t0.clientX + t1.clientX) / 2 - rect.left;
-                                                             var midY = (t0.clientY + t1.clientY) / 2 - rect.top;
-                                                             viewer.style.transformOrigin = midX + 'px ' + midY + 'px';
-                                                             viewer.style.transition = 'none';
-                                                         }
-                                                         
-                                                         pinchFactor = 1.0;
-                                                         
-                                                         // Dynamically attach high-precision non-passive listener for pinching
-                                                         document.addEventListener('touchmove', handleTouchMovePinch, { passive: false });
-                                                         
-                                                         e.preventDefault();
-                                                     } else if (e.touches.length === 1) {
+                                                     if (e.touches.length === 1) {
                                                          var touch = e.touches[0];
                                                          startTouchX = touch.clientX;
                                                          startTouchY = touch.clientY;
                                                      }
-                                                 }, { passive: false });
+                                                 }, { passive: true });
 
                                                  document.addEventListener('touchend', function(e) {
-                                                     if (isPinching && e.touches.length < 2) {
-                                                         isPinching = false;
-                                                         
-                                                         // Clean up high-precision dynamic listener
-                                                         document.removeEventListener('touchmove', handleTouchMovePinch);
-                                                         
-                                                         var viewer = document.getElementById('viewer');
-                                                         if (viewer) {
-                                                             viewer.style.transform = '';
-                                                             viewer.style.transformOrigin = '';
-                                                             viewer.style.transition = '';
-                                                         }
-                                                         
-                                                         if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer && pinchFactor !== 1.0) {
-                                                             var newScale = initialPinchScale * pinchFactor;
-                                                             var minS = window.initialPdfScale || window.minPdfScale || 0.5;
-                                                             var maxS = 4.0;
-                                                             
-                                                             if (pinchFactor < 1.0 && newScale <= minS * 1.05) {
-                                                                 if (window.isHorizontalScroll) {
-                                                                     PDFViewerApplication.pdfViewer.currentScaleValue = 'page-fit';
-                                                                 } else {
-                                                                     PDFViewerApplication.pdfViewer.currentScaleValue = 'page-width';
-                                                                 }
-                                                                 var container = document.getElementById('viewerContainer');
-                                                                 if (container) {
-                                                                     container.scrollLeft = 0;
-                                                                 }
-                                                             } else {
-                                                                 if (newScale < minS) newScale = minS;
-                                                                 if (newScale > maxS) newScale = maxS;
-                                                                 PDFViewerApplication.pdfViewer.currentScale = newScale;
-                                                             }
-                                                         }
-                                                         pinchFactor = 1.0;
-                                                     } else if (e.changedTouches.length === 1 && !isPinching) {
+                                                     if (e.changedTouches.length === 1) {
                                                          // If there's an active text selection, do NOT trigger any tap / bars toggle!
                                                          var selection = window.getSelection();
                                                          if (selection && selection.toString().trim().length > 0) {
@@ -1234,7 +1158,7 @@ fun PDFReaderScreen(
                                                                      clearTimeout(singleTapTimeout);
                                                                      singleTapTimeout = null;
                                                                  }
-                                                                 handleDoubleTap();
+                                                                 // Let native double-tap zoom happen by not preventing default
                                                                  lastTapTime = 0;
                                                              } else {
                                                                  lastTapTime = now;
@@ -1246,20 +1170,6 @@ fun PDFReaderScreen(
                                                                  }, 250);
                                                              }
                                                          }
-                                                     }
-                                                 }, { passive: true });
-
-                                                 document.addEventListener('touchcancel', function(e) {
-                                                     if (isPinching) {
-                                                         isPinching = false;
-                                                         document.removeEventListener('touchmove', handleTouchMovePinch);
-                                                         var viewer = document.getElementById('viewer');
-                                                         if (viewer) {
-                                                             viewer.style.transform = '';
-                                                             viewer.style.transformOrigin = '';
-                                                             viewer.style.transition = '';
-                                                         }
-                                                         pinchFactor = 1.0;
                                                      }
                                                  }, { passive: true });
                                                  
