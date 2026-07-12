@@ -1193,32 +1193,7 @@ fun PDFReaderScreen(
                                         setupBridge();
                                     })();
                                 """.trimIndent()
-                                view?.evaluateJavascript(bridgeSetup, null) /*
-
-                                view?.evaluateJavascript("""
-                                (function() {
-                                    function fixSpanPositions() {
-                                        document.querySelectorAll('.textLayer span').forEach(function(span) {
-                                            if (span.style.transform && span.style.transform !== 'none') {
-                                                var rect = span.getBoundingClientRect();
-                                                var scrollTop = document.getElementById('viewerContainer').scrollTop;
-                                                var scrollLeft = document.getElementById('viewerContainer').scrollLeft;
-                                                span.style.left = (rect.left + scrollLeft) + 'px';
-                                                span.style.top = (rect.top + scrollTop) + 'px';
-                                                span.style.transform = 'none';
-                                                span.style.position = 'absolute';
-                                                span.style.whiteSpace = 'pre';
-                                            }
-                                        });
-                                    }
-
-                                    if (typeof PDFViewerApplication !== 'undefined') {
-                                        PDFViewerApplication.eventBus.on('textlayerrendered', function() {
-                                            setTimeout(fixSpanPositions, 50);
-                                        });
-                                    }
-                                })();
-                                */
+                                view?.evaluateJavascript(bridgeSetup, null)
 
                                  
 
