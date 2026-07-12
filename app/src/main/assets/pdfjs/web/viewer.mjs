@@ -10033,7 +10033,7 @@ class TextLayerBuilder {
         }
       }
       isFirefox ??= getComputedStyle(this.#textLayers.values().next().value).getPropertyValue("-moz-user-select") === "none";
-      if (isFirefox) {
+      if (true) {
         return;
       }
       const range = selection.getRangeAt(0);

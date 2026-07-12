@@ -1019,6 +1019,7 @@ fun PDFReaderScreen(
                                     body { background-color: transparent !important; }
                                     .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                     .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
+                                     .textLayer.highlighting { touch-action: auto !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -3126,10 +3127,20 @@ fun sharePdfFile(context: Context, path: String) {
             Toast.makeText(context, "الملف غير موجود", Toast.LENGTH_SHORT).show()
             return
         }
+        
+        // Copy the file to app's cache directory to prevent any FileProvider path/root exceptions
+        val safeName = getSafePdfFileName(file.name)
+        val cacheFile = File(context.cacheDir, "shared_temp_${safeName}")
+        file.inputStream().use { inputStream ->
+            cacheFile.outputStream().use { outputStream ->
+                inputStream.copyTo(outputStream)
+            }
+        }
+
         val uri = androidx.core.content.FileProvider.getUriForFile(
             context,
             "com.example.fileprovider",
-            file
+            cacheFile
         )
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
