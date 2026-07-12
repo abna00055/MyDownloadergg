@@ -1020,6 +1020,7 @@ fun PDFReaderScreen(
                                     .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                     .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
                                      .textLayer.highlighting { touch-action: auto !important; }
+                                     .textLayer.selecting .endOfContent { top: 100% !important; user-select: none !important; -webkit-user-select: none !important; pointer-events: none !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
