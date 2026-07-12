@@ -1286,6 +1286,39 @@ fun PDFReaderScreen(
                                 """.trimIndent()
                                 view?.evaluateJavascript(bridgeSetup, null)
 
+                                 view?.evaluateJavascript("""
+                                     (function() {
+                                         function fixTextLayerSelection() {
+                                             var spans = document.querySelectorAll('.textLayer span');
+                                             spans.forEach(function(span) {
+                                                 var transform = window.getComputedStyle(span).transform;
+                                                 if (transform && transform !== 'none') {
+                                                     var rect = span.getBoundingClientRect();
+                                                     span.style.transform = 'none';
+                                                     span.style.position = 'absolute';
+                                                     span.style.left = rect.left + window.scrollX + 'px';
+                                                     span.style.top = rect.top + window.scrollY + 'px';
+                                                     span.style.width = rect.width + 'px';
+                                                     span.style.height = rect.height + 'px';
+                                                 }
+                                             });
+                                         }
+                                         
+                                         var observer = new MutationObserver(function(mutations) {
+                                             mutations.forEach(function(mutation) {
+                                                 if (mutation.addedNodes.length > 0) {
+                                                     setTimeout(fixTextLayerSelection, 100);
+                                                 }
+                                             });
+                                         });
+                                         
+                                         observer.observe(document.getElementById('viewer'), {
+                                             childList: true,
+                                             subtree: true
+                                         });
+                                     })();
+                                 """.trimIndent(), null)
+
                                 // Re-apply current reading mode visual background filters
                                 applyReaderTheme(currentTheme)
                                 applyScrollLayout(isHorizontalScroll, isSnapToPage, isDoubleSpread)
