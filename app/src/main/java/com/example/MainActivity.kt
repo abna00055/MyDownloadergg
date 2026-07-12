@@ -1017,22 +1017,10 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { 
-                                        z-index: 10 !important; 
-                                        pointer-events: none !important; 
-                                        -webkit-user-select: none !important; 
-                                        user-select: none !important; 
-                                    }
-                                    .textLayer span { 
-                                        pointer-events: auto !important; 
-                                        -webkit-user-select: text !important; 
-                                        user-select: text !important; 
-                                    }
                                     .textLayer *::selection {
                                         background: rgba(0, 122, 255, 0.3) !important;
                                         color: transparent !important;
                                     }
-                                    .textLayer.highlighting { touch-action: auto !important; }
                                     .textLayer.selecting .endOfContent { display: none !important; }
                                 """.trimIndent()
 
@@ -1112,116 +1100,11 @@ fun PDFReaderScreen(
                                                     return false;
                                                 }
 
-                                                function handleDoubleTap() {
-                                                    if (typeof PDFViewerApplication === 'undefined' || !PDFViewerApplication.pdfViewer) return;
-                                                    var viewer = PDFViewerApplication.pdfViewer;
-                                                    var current = viewer.currentScale;
-                                                    
-                                                    var baseScale = window.initialPdfScale || window.minPdfScale || 1.0;
-                                                    var targetScale = baseScale * 1.5;
-                                                    
-                                                    if (Math.abs(current - targetScale) < 0.15 || current > baseScale * 1.15) {
-                                                        if (window.isHorizontalScroll) {
-                                                            viewer.currentScaleValue = 'page-fit';
-                                                        } else {
-                                                            viewer.currentScaleValue = 'page-width';
-                                                        }
-                                                        var container = document.getElementById('viewerContainer');
-                                                        if (container) {
-                                                            container.scrollLeft = 0;
-                                                        }
-                                                    } else {
-                                                        viewer.currentScale = targetScale;
-                                                    }
-                                                }
-
-                                                var lastTapTime = 0;
-                                                var singleTapTimeout = null;
-                                                var startTouchX = 0, startTouchY = 0;
-                                                var wasPinching = false;
-                                                var pinchTimeout = null;
-                                                var wasSelecting = false;
-                                                var selectionTimeout = null;
-
-                                                function isTextSelected() {
-                                                    var sel = window.getSelection();
-                                                    return sel && sel.toString().trim().length > 0;
-                                                }
-
-                                                // Listen to selection changes to lock/unlock standard behaviors
-                                                document.addEventListener('selectionchange', function() {
-                                                    if (isTextSelected()) {
-                                                        wasSelecting = true;
-                                                        if (selectionTimeout) clearTimeout(selectionTimeout);
-                                                    } else {
-                                                        if (selectionTimeout) clearTimeout(selectionTimeout);
-                                                        selectionTimeout = setTimeout(function() {
-                                                            wasSelecting = false;
-                                                            selectionTimeout = null;
-                                                        }, 500);
-                                                    }
-                                                });
-
-
-                                                document.addEventListener('touchstart', function(e) {
-                                                    if (e.touches.length > 1) {
-                                                        wasPinching = true;
-                                                        if (pinchTimeout) clearTimeout(pinchTimeout);
-                                                    }
-                                                    if (isTextSelected() || wasSelecting || wasPinching) {
-                                                        return;
-                                                    }
-                                                    if (e.touches.length === 1) {
-                                                        var touch = e.touches[0];
-                                                        startTouchX = touch.clientX;
-                                                        startTouchY = touch.clientY;
-                                                    }
-                                                }, { passive: true });
-
-                                                document.addEventListener('touchend', function(e) {
-                                                    if (wasPinching) {
-                                                        if (!pinchTimeout) {
-                                                            pinchTimeout = setTimeout(function() {
-                                                                wasPinching = false;
-                                                                pinchTimeout = null;
-                                                            }, 500);
-                                                        }
-                                                        return;
-                                                    }
-                                                    if (isTextSelected() || wasSelecting) {
-                                                        return;
-                                                    }
-
-                                                    if (e.changedTouches.length === 1) {
-                                                        var touch = e.changedTouches[0];
-                                                        var endX = touch.clientX;
-                                                        var endY = touch.clientY;
-                                                        
-                                                        if (Math.hypot(endX - startTouchX, endY - startTouchY) < 15) {
-                                                            var target = touch.target || e.target;
-                                                            if (isInteractive(target)) {
-                                                                return;
-                                                            }
-                                                            
-                                                            var now = Date.now();
-                                                            var delay = now - lastTapTime;
-                                                            
-                                                            if (delay < 300) {
-                                                                if (singleTapTimeout) {
-                                                                    clearTimeout(singleTapTimeout);
-                                                                    singleTapTimeout = null;
-                                                                }
-                                                                handleDoubleTap();
-                                                                lastTapTime = 0;
-                                                            } else {
-                                                                lastTapTime = now;
-                                                                singleTapTimeout = setTimeout(function() {
-                                                                    if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
-                                                                        AndroidBridge.onDocumentClicked();
-                                                                    }
-                                                                    singleTapTimeout = null;
-                                                                }, 250);
-                                                            }
+                                                document.addEventListener('click', function(e) {
+                                                    var textLayer = e.target.closest('.textLayer');
+                                                    if (!textLayer) {
+                                                        if (typeof AndroidBridge !== 'undefined') {
+                                                            AndroidBridge.onDocumentClicked();
                                                         }
                                                     }
                                                 }, { passive: true });
