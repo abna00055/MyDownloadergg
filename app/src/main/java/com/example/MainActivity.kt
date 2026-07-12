@@ -1021,7 +1021,6 @@ fun PDFReaderScreen(
                                         background: rgba(0, 122, 255, 0.3) !important;
                                         color: transparent !important;
                                     }
-                                    .textLayer.selecting .endOfContent { display: none !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1100,12 +1099,26 @@ fun PDFReaderScreen(
                                                     return false;
                                                 }
 
-                                                document.addEventListener('click', function(e) {
-                                                    var textLayer = e.target.closest('.textLayer');
-                                                    if (!textLayer) {
-                                                        if (typeof AndroidBridge !== 'undefined') {
-                                                            AndroidBridge.onDocumentClicked();
+                                                var startTouchX = 0;
+                                                var startTouchY = 0;
+                                                var wasPinching = false;
+                                                var wasSelecting = false;
+
+                                                document.addEventListener('touchend', function(e) {
+                                                    if (e.changedTouches.length === 1 && !wasPinching && !wasSelecting) {
+                                                        var touch = e.changedTouches[0];
+                                                        if (Math.hypot(touch.clientX - startTouchX, touch.clientY - startTouchY) < 15) {
+                                                            if (typeof AndroidBridge !== 'undefined') {
+                                                                AndroidBridge.onDocumentClicked();
+                                                            }
                                                         }
+                                                    }
+                                                }, { passive: true });
+
+                                                document.addEventListener('touchstart', function(e) {
+                                                    if (e.touches.length === 1) {
+                                                        startTouchX = e.touches[0].clientX;
+                                                        startTouchY = e.touches[0].clientY;
                                                     }
                                                 }, { passive: true });
                                                 
@@ -1180,7 +1193,7 @@ fun PDFReaderScreen(
                                         setupBridge();
                                     })();
                                 """.trimIndent()
-                                view?.evaluateJavascript(bridgeSetup, null)
+                                view?.evaluateJavascript(bridgeSetup, null) /*
 
                                 view?.evaluateJavascript("""
                                 (function() {
@@ -1205,7 +1218,7 @@ fun PDFReaderScreen(
                                         });
                                     }
                                 })();
-                                """, null)
+                                */
 
                                  
 
