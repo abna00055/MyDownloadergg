@@ -1012,15 +1012,29 @@ fun PDFReaderScreen(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
 
-                                // Inject CSS to hide default controls and padding to let document float beautiful
+                                // Inject CSS to hide default controls and padding to let document float beautifully
                                 val css = """
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
-                                    .textLayer span { pointer-events: auto !important; -webkit-user-select: text !important; user-select: text !important; }
-                                     .textLayer.highlighting { touch-action: auto !important; }
-                                     .textLayer.selecting .endOfContent { top: 100% !important; user-select: none !important; -webkit-user-select: none !important; pointer-events: none !important; }
+                                    .textLayer { 
+                                        z-index: 10 !important; 
+                                        pointer-events: auto !important; 
+                                        -webkit-user-select: text !important; 
+                                        user-select: text !important; 
+                                    }
+                                    .textLayer span { 
+                                        pointer-events: auto !important; 
+                                        -webkit-user-select: text !important; 
+                                        user-select: text !important; 
+                                        transform: none !important; 
+                                    }
+                                    .textLayer *::selection {
+                                        background: rgba(0, 122, 255, 0.3) !important;
+                                        color: transparent !important;
+                                    }
+                                    .textLayer.highlighting { touch-action: auto !important; }
+                                    .textLayer.selecting .endOfContent { display: none !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
