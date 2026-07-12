@@ -1027,7 +1027,6 @@ fun PDFReaderScreen(
                                         pointer-events: auto !important; 
                                         -webkit-user-select: text !important; 
                                         user-select: text !important; 
-                                        transform: none !important; 
                                     }
                                     .textLayer *::selection {
                                         background: rgba(0, 122, 255, 0.3) !important;
