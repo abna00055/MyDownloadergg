@@ -1019,9 +1019,9 @@ fun PDFReaderScreen(
                                     body { background-color: transparent !important; }
                                     .textLayer { 
                                         z-index: 10 !important; 
-                                        pointer-events: auto !important; 
-                                        -webkit-user-select: text !important; 
-                                        user-select: text !important; 
+                                        pointer-events: none !important; 
+                                        -webkit-user-select: none !important; 
+                                        user-select: none !important; 
                                     }
                                     .textLayer span { 
                                         pointer-events: auto !important; 
