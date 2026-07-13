@@ -1021,6 +1021,9 @@ fun PDFReaderScreen(
                                         background: rgba(0, 122, 255, 0.3) !important;
                                         color: transparent !important;
                                     }
+                                    .textLayer .endOfContent {
+                                        display: none !important;
+                                    }
                                 """.trimIndent()
 
                                 val styleInjection = """
