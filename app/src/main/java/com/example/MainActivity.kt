@@ -1087,7 +1087,34 @@ fun PDFReaderScreen(
                                                     }
                                                 });
 
-                                                // Tap handling to hide/show app bars
+                                                 var wasSelecting = false;
+                                                 var selectionTimeout = null;
+                                                 function isTextSelected() {
+                                                     var sel = window.getSelection();
+                                                     return sel && !sel.isCollapsed && sel.toString().trim().length > 0;
+                                                 }
+
+                                                 document.addEventListener('selectionchange', function() {
+                                                     var container = document.getElementById('viewerContainer');
+                                                     if (isTextSelected()) {
+                                                         wasSelecting = true;
+                                                         if (selectionTimeout) clearTimeout(selectionTimeout);
+                                                         if (container) {
+                                                             container.style.overflow = 'hidden';
+                                                         }
+                                                     } else {
+                                                         if (selectionTimeout) clearTimeout(selectionTimeout);
+                                                         selectionTimeout = setTimeout(function() {
+                                                             wasSelecting = false;
+                                                             selectionTimeout = null;
+                                                             if (container) {
+                                                                 container.style.overflow = 'auto';
+                                                             }
+                                                         }, 500);
+                                                     }
+                                                 });
+
+                                                 // Tap handling to hide/show app bars
                                                 document.addEventListener('click', function(e) {
                                                     if (!e.target.closest('.textLayer') && 
                                                         !e.target.closest('a')) {
