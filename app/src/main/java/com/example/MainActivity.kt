@@ -20,8 +20,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -80,39 +78,9 @@ class MainActivity : ComponentActivity() {
 
     private var webViewRef: WebView? = null
 
-    // For "Open With" incoming intent tracking
-    val incomingPdfUriState = mutableStateOf<Uri?>(null)
-
-    fun clearIncomingPdfUri() {
-        incomingPdfUriState.value = null
-    }
-
-    private fun handleIncomingIntent(intent: Intent?) {
-        if (intent != null && intent.action == Intent.ACTION_VIEW) {
-            val uri = intent.data
-            if (uri != null) {
-                incomingPdfUriState.value = uri
-            }
-        }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleIncomingIntent(intent)
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIncomingIntent(intent)
-
-        // Initialize PDFBox
-        try {
-            com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(this)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
 
         // Copy default sample PDF on start-up
         copyAssetToCache(this, "sample.pdf")
@@ -135,28 +103,6 @@ class MainActivity : ComponentActivity() {
         var openedPdfName by remember { mutableStateOf("sample.pdf") }
         var openedPdfPath by remember { mutableStateOf("") }
         var isCopyingFile by remember { mutableStateOf(false) }
-
-        // Reactively observe and open any PDF received from other applications ("Open With")
-        val activity = context as? MainActivity
-        val incomingUri = activity?.incomingPdfUriState?.value
-
-        LaunchedEffect(incomingUri) {
-            if (incomingUri != null) {
-                isCopyingFile = true
-                val originalName = getFileNameFromUri(context, incomingUri) ?: "External Document.pdf"
-                val safeFileName = getSafePdfFileName(originalName)
-                val success = withContext(Dispatchers.IO) {
-                    copyUriToCache(context, incomingUri, safeFileName)
-                }
-                isCopyingFile = false
-                if (success) {
-                    openedPdfName = originalName
-                    openedPdfPath = File(context.cacheDir, safeFileName).absolutePath
-                    currentScreen = "pdf_reader"
-                }
-                activity?.clearIncomingPdfUri()
-            }
-        }
         
         val scope = rememberCoroutineScope()
 
@@ -298,7 +244,7 @@ class MainActivity : ComponentActivity() {
                         onNextPage = { executeJs("PDFViewerApplication.pdfViewer.nextPage();") },
                         onPrevPage = { executeJs("PDFViewerApplication.pdfViewer.previousPage();") },
                         onZoomIn = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale += 0.25; }") },
-                        onZoomOut = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { var newScale = PDFViewerApplication.pdfViewer.currentScale - 0.25; if (window.minPdfScale && newScale < window.minPdfScale) { PDFViewerApplication.pdfViewer.currentScale = window.minPdfScale; } else { PDFViewerApplication.pdfViewer.currentScale = newScale; } }") },
+                        onZoomOut = { executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentScale -= 0.25; }") },
                         onGoToPage = { pageNum -> executeJs("if (typeof PDFViewerApplication !== 'undefined') { PDFViewerApplication.pdfViewer.currentPageNumber = $pageNum; }") },
                         onToggleScrollMode = { isHorizontal ->
                             val mode = if (isHorizontal) 1 else 0
@@ -544,7 +490,6 @@ fun PDFReaderScreen(
     var playingAudioUrl by remember { mutableStateOf<String?>(null) }
     var playingAudioText by remember { mutableStateOf("") }
     var isAudioPlayingState by remember { mutableStateOf(false) }
-    var isAudioPreparing by remember { mutableStateOf(false) }
     var audioProgress by remember { mutableStateOf(0.0f) }
     var audioDurationText by remember { mutableStateOf("0:00") }
     var audioPositionText by remember { mutableStateOf("0:00") }
@@ -581,7 +526,6 @@ fun PDFReaderScreen(
             mediaPlayer?.release()
             mediaPlayer = null
             isAudioPlayingState = false
-            isAudioPreparing = true
             audioProgress = 0.0f
             playingAudioUrl = url
             playingAudioText = text
@@ -590,23 +534,20 @@ fun PDFReaderScreen(
                 setAudioStreamType(AudioManager.STREAM_MUSIC)
                 setDataSource(url)
                 setOnPreparedListener {
-                    isAudioPreparing = false
                     it.start()
                     isAudioPlayingState = true
                 }
                 setOnCompletionListener {
-                    isAudioPreparing = false
                     isAudioPlayingState = false
                     audioProgress = 1.0f
                     scope.launch {
                         delay(1500)
-                        if (!isAudioPlayingState && !isAudioPreparing) {
+                        if (!isAudioPlayingState) {
                             playingAudioUrl = null
                         }
                     }
                 }
                 setOnErrorListener { _, _, _ ->
-                    isAudioPreparing = false
                     isAudioPlayingState = false
                     Toast.makeText(context, "خطأ في تشغيل الصوت", Toast.LENGTH_SHORT).show()
                     false
@@ -615,7 +556,6 @@ fun PDFReaderScreen(
             mediaPlayer = mp
             mp.prepareAsync()
         } catch (e: Exception) {
-            isAudioPreparing = false
             e.printStackTrace()
             Toast.makeText(context, "فشل تحميل ملف الصوت", Toast.LENGTH_SHORT).show()
         }
@@ -756,7 +696,6 @@ fun PDFReaderScreen(
         }
         val spreadMode = if (isDouble) 1 else 0
         val script = """
-            window.isHorizontalScroll = $isHorizontal;
             if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.pdfViewer) {
                 PDFViewerApplication.pdfViewer.scrollMode = $scrollMode;
                 PDFViewerApplication.pdfViewer.spreadMode = $spreadMode;
@@ -948,7 +887,6 @@ fun PDFReaderScreen(
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         setWebView(this)
                         settings.apply {
                             javaScriptEnabled = true
@@ -960,7 +898,6 @@ fun PDFReaderScreen(
                             loadWithOverviewMode = true
                             builtInZoomControls = true
                             displayZoomControls = false
-                            setSupportZoom(true)
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -1012,12 +949,11 @@ fun PDFReaderScreen(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
 
-                                // Inject CSS to hide default controls and padding to let document float beautifully
+                                // Inject CSS to hide default controls and padding to let document float beautiful
                                 val css = """
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer .endOfContent { display: none !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1025,17 +961,6 @@ fun PDFReaderScreen(
                                     style.type = 'text/css';
                                     style.innerHTML = `$css`;
                                     document.head.appendChild(style);
-                                    
-                                    // Ensure viewport allows native zoom and scaling perfectly
-                                    var meta = document.querySelector('meta[name="viewport"]');
-                                    if (meta) {
-                                        meta.setAttribute('content', 'width=device-width, initial-scale=1.0');
-                                    } else {
-                                        meta = document.createElement('meta');
-                                        meta.name = 'viewport';
-                                        meta.content = 'width=device-width, initial-scale=1.0';
-                                        document.head.appendChild(meta);
-                                    }
                                 """.trimIndent()
                                 view?.evaluateJavascript(styleInjection, null)
 
@@ -1063,38 +988,8 @@ fun PDFReaderScreen(
                                                 });
                                                 PDFViewerApplication.eventBus.on('scalechanging', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.scale) {
-                                                        if (window.minPdfScale && e.scale < window.minPdfScale) {
-                                                            PDFViewerApplication.pdfViewer.currentScale = window.minPdfScale;
-                                                        } else {
-                                                            AndroidBridge.onScaleChanged(e.scale);
-                                                        }
+                                                        AndroidBridge.onScaleChanged(e.scale);
                                                     }
-                                                });
-                                                PDFViewerApplication.eventBus.on('pagerendered', function(e) {
-                                                    if (!window.minPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
-                                                        window.minPdfScale = PDFViewerApplication.pdfViewer.currentScale;
-                                                    }
-                                                    if (!window.initialPdfScale && PDFViewerApplication.pdfViewer && PDFViewerApplication.pdfViewer.currentScale) {
-                                                        window.initialPdfScale = PDFViewerApplication.pdfViewer.currentScale;
-                                                    }
-                                                });
-                                                
-                                                PDFViewerApplication.eventBus.on('textlayerrendered', function() {
-                                                    document.querySelectorAll('.textLayer').forEach(function(layer) {
-                                                        layer.addEventListener('touchstart', function(e) {
-                                                            if (e.touches.length === 1) {
-                                                                var container = document.getElementById('viewerContainer');
-                                                                if (container) container.style.touchAction = 'none';
-                                                            }
-                                                        }, { passive: true });
-                                                        
-                                                        layer.addEventListener('touchend', function() {
-                                                            setTimeout(function() {
-                                                                var container = document.getElementById('viewerContainer');
-                                                                if (container) container.style.touchAction = 'auto';
-                                                            }, 300);
-                                                        }, { passive: true });
-                                                    });
                                                 });
                                                 PDFViewerApplication.eventBus.on('updatefindmatchescount', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.matchesCount) {
@@ -1102,16 +997,6 @@ fun PDFReaderScreen(
                                                     }
                                                 });
 
-                                                 // Tap handling to hide/show app bars
-                                                document.addEventListener('click', function(e) {
-                                                    if (!e.target.closest('.textLayer') && 
-                                                        !e.target.closest('a')) {
-                                                        if (typeof AndroidBridge !== 'undefined') {
-                                                            AndroidBridge.onDocumentClicked();
-                                                        }
-                                                    }
-                                                });
-                                                
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
                                                     var target = e.target;
@@ -1147,8 +1032,11 @@ fun PDFReaderScreen(
                                                             e.stopPropagation();
                                                             if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onLinkClicked) {
                                                                 AndroidBridge.onLinkClicked(href, text.trim());
-                                                                return;
                                                             }
+                                                        }
+                                                    } else {
+                                                        if (typeof AndroidBridge !== 'undefined' && AndroidBridge.onDocumentClicked) {
+                                                            AndroidBridge.onDocumentClicked();
                                                         }
                                                     }
                                                 }, true);
@@ -1199,112 +1087,23 @@ fun PDFReaderScreen(
             )
         }
 
-        // Enhanced top status bar dimming overlay to ensure white system status bar icons are beautifully readable
+        // Subtle top gradient to ensure white status bar icons are beautifully readable against white PDF page content
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(64.dp)
+                .height(48.dp)
                 .background(
                     brush = androidx.compose.ui.graphics.Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.65f),
-                            Color.Black.copy(alpha = 0.35f),
-                            Color.Black.copy(alpha = 0.12f),
+                            Color.Black.copy(alpha = 0.22f),
+                            Color.Black.copy(alpha = 0.08f),
                             Color.Transparent
                         )
                     )
                 )
-                .zIndex(10f)
+                .zIndex(1f)
         )
-
-        // WPS & PDF Reader Pro inspired scrollbar page indicator that fades out after 900ms of inactivity
-        var showPageIndicator by remember { mutableStateOf(false) }
-        
-        LaunchedEffect(currentPage) {
-            if (totalPages > 1) {
-                showPageIndicator = true
-                delay(900)
-                showPageIndicator = false
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showPageIndicator,
-            enter = fadeIn() + slideInHorizontally(initialOffsetX = { it }),
-            exit = fadeOut() + slideOutHorizontally(targetOffsetX = { it }),
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 8.dp)
-                .zIndex(15f)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight(0.6f)
-                    .width(180.dp)
-            ) {
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val trackHeightPx = constraints.maxHeight
-                    val density = androidx.compose.ui.platform.LocalDensity.current
-                    val trackHeightDp = with(density) { trackHeightPx.toDp() }
-                    
-                    // Vertical scrollbar track
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .fillMaxHeight()
-                            .width(3.dp)
-                            .background(Color.White.copy(alpha = 0.15f), RoundedCornerShape(1.5.dp))
-                    )
-                    
-                    val progressFraction = if (totalPages > 1) {
-                        (currentPage - 1).toFloat() / (totalPages - 1).toFloat()
-                    } else {
-                        0f
-                    }
-                    
-                    val animatedProgress by animateFloatAsState(
-                        targetValue = progressFraction,
-                        animationSpec = spring(stiffness = androidx.compose.animation.core.Spring.StiffnessLow),
-                        label = "scroll_progress"
-                    )
-                    
-                    val thumbHeight = 40.dp
-                    val yOffset = (trackHeightDp - thumbHeight) * animatedProgress
-                    
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .offset(y = yOffset),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        // WPS style tooltip with PDF Reader Pro purple theme
-                        Surface(
-                            color = Color(0xE67C3AED), // Beautiful semi-translucent purple
-                            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp, topEnd = 4.dp, bottomEnd = 4.dp),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.padding(end = 6.dp)
-                        ) {
-                            Text(
-                                text = "$currentPage / $totalPages",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-                        
-                        // Scroll thumb slider
-                        Box(
-                            modifier = Modifier
-                                .size(width = 8.dp, height = 36.dp)
-                                .background(Color(0xFF8B5CF6), RoundedCornerShape(4.dp))
-                                .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        )
-                    }
-                }
-            }
-        }
 
         // FLOATING TOP BAR - Modelled after PDF Reader Pro
         AnimatedVisibility(
@@ -2402,7 +2201,7 @@ fun PDFReaderScreen(
                     .shadow(10.dp, RoundedCornerShape(24.dp))
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -2410,120 +2209,92 @@ fun PDFReaderScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         // Play / Pause Button
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(26.dp)
-                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
-                                .clip(CircleShape)
-                                .clickable {
-                                    mediaPlayer?.let { mp ->
-                                        if (mp.isPlaying) {
-                                            mp.pause()
-                                            isAudioPlayingState = false
-                                        } else {
-                                            mp.start()
-                                            isAudioPlayingState = true
-                                        }
-                                    } ?: run {
-                                        playingAudioUrl?.let { playAudio(it, playingAudioText) }
+                        IconButton(
+                            onClick = {
+                                mediaPlayer?.let { mp ->
+                                    if (mp.isPlaying) {
+                                        mp.pause()
+                                        isAudioPlayingState = false
+                                    } else {
+                                        mp.start()
+                                        isAudioPlayingState = true
                                     }
+                                } ?: run {
+                                    playingAudioUrl?.let { playAudio(it, playingAudioText) }
                                 }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.12f), CircleShape)
                         ) {
-                            if (isAudioPreparing) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    strokeWidth = 1.5.dp,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = "تشغيل/إيقاف مؤقت",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isAudioPlayingState) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "تشغيل/إيقاف مؤقت",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         // Clicked word Text and Time Progress Info
                         Column(
                             modifier = Modifier.weight(1f)
                         ) {
-                            val displayText = if (playingAudioText.isNotBlank()) playingAudioText else (playingAudioUrl?.let { extractWordFromUrl(it) } ?: "نطق الكلمة")
-                            val textLength = displayText.length
-                            val fontSize = when {
-                                textLength > 24 -> 11.sp
-                                textLength > 18 -> 13.sp
-                                textLength > 12 -> 14.sp
-                                else -> 16.sp
-                            }
                             Text(
-                                text = displayText,
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = fontSize
-                                ),
+                                text = if (playingAudioText.isNotBlank()) playingAudioText else (playingAudioUrl?.let { extractWordFromUrl(it) } ?: "نطق الكلمة"),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.height(1.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "$audioPositionText / $audioDurationText",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.6f)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         // Replay/Repeat Button
-                        Box(
-                            contentAlignment = Alignment.Center,
+                        IconButton(
+                            onClick = { playingAudioUrl?.let { playAudio(it, playingAudioText) } },
                             modifier = Modifier
-                                .size(26.dp)
+                                .size(36.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
-                                .clip(CircleShape)
-                                .clickable {
-                                    playingAudioUrl?.let { playAudio(it, playingAudioText) }
-                                }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "إعادة النطق",
                                 tint = Color.White,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(20.dp))
 
                         // Close/Dismiss Button (x)
-                        Box(
-                            contentAlignment = Alignment.Center,
+                        IconButton(
+                            onClick = {
+                                mediaPlayer?.stop()
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                isAudioPlayingState = false
+                                playingAudioUrl = null
+                                playingAudioText = ""
+                                audioProgress = 0.0f
+                            },
                             modifier = Modifier
-                                .size(26.dp)
+                                .size(36.dp)
                                 .background(Color.White.copy(alpha = 0.12f), CircleShape)
-                                .clip(CircleShape)
-                                .clickable {
-                                    mediaPlayer?.stop()
-                                    mediaPlayer?.release()
-                                    mediaPlayer = null
-                                    isAudioPlayingState = false
-                                    isAudioPreparing = false
-                                    playingAudioUrl = null
-                                    playingAudioText = ""
-                                    audioProgress = 0.0f
-                                }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "إغلاق",
                                 tint = Color.White,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -3027,20 +2798,10 @@ fun sharePdfFile(context: Context, path: String) {
             Toast.makeText(context, "الملف غير موجود", Toast.LENGTH_SHORT).show()
             return
         }
-        
-        // Copy the file to app's cache directory to prevent any FileProvider path/root exceptions
-        val safeName = getSafePdfFileName(file.name)
-        val cacheFile = File(context.cacheDir, "shared_temp_${safeName}")
-        file.inputStream().use { inputStream ->
-            cacheFile.outputStream().use { outputStream ->
-                inputStream.copyTo(outputStream)
-            }
-        }
-
         val uri = androidx.core.content.FileProvider.getUriForFile(
             context,
             "com.example.fileprovider",
-            cacheFile
+            file
         )
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
@@ -3171,7 +2932,7 @@ fun FileOptionsBottomSheet(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "${file.pages} صفحة  •  ${formatSize(file.size)}",
+                        text = "pages ${file.pages}  •  ${formatSize(file.size)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray
                     )
@@ -3194,15 +2955,15 @@ fun FileOptionsBottomSheet(
             }
 
             Text(
-                text = "إجراءات سريعة",
+                text = "Quick Actions",
                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                 color = Color.Gray,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
             BottomSheetActionRow(
-                title = if (isFav) "إزالة من المفضلة" else "إضافة إلى المفضلة",
-                subtitle = "حفظ المستند للوصول إليه بسرعة لاحقاً",
+                title = if (isFav) "Remove from Favorites" else "Add to Favorites",
+                subtitle = "Save to your favorites for quick access",
                 icon = if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
                 iconColor = if (isFav) Color(0xFFFFB74D) else Color.White,
                 onClick = {
@@ -3212,8 +2973,8 @@ fun FileOptionsBottomSheet(
             )
 
             BottomSheetActionRow(
-                title = "مشاركة الملف",
-                subtitle = "إرسال هذا الملف وتسهيل مشاركته مع الآخرين",
+                title = "Share",
+                subtitle = "Send this PDF to other apps",
                 icon = Icons.Default.Share,
                 onClick = {
                     onShare()
@@ -3222,8 +2983,8 @@ fun FileOptionsBottomSheet(
             )
 
             BottomSheetActionRow(
-                title = "إعادة تسمية",
-                subtitle = "تعديل اسم مستند الـ PDF الحالي بمرونة",
+                title = "Rename",
+                subtitle = "Change the file name",
                 icon = Icons.Default.Edit,
                 onClick = {
                     onRename()
@@ -3232,8 +2993,8 @@ fun FileOptionsBottomSheet(
             )
 
             BottomSheetActionRow(
-                title = "معلومات الملف",
-                subtitle = "عرض تفاصيل وحجم وتاريخ تعديل الملف بالكامل",
+                title = "File Info",
+                subtitle = "View file details and properties",
                 icon = Icons.Default.Info,
                 onClick = {
                     onInfo()
@@ -3263,12 +3024,12 @@ fun FileOptionsBottomSheet(
                 ) {
                     Column {
                         Text(
-                            text = "حذف الملف",
+                            text = "Delete",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFFEF5350)
                         )
                         Text(
-                            text = "حذف هذا الملف نهائياً من على جهازك",
+                            text = "Permanently remove this file",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFEF5350).copy(alpha = 0.7f)
                         )
@@ -3672,21 +3433,13 @@ fun copyFileToCache(context: Context, path: String, safeFileName: String): Boole
         if (!srcFile.exists()) return false
         val cacheFile = File(context.cacheDir, safeFileName)
         val genericFile = File(context.cacheDir, "current_reader_doc.pdf")
+        if (cacheFile.exists()) cacheFile.delete()
+        if (genericFile.exists()) genericFile.delete()
         
-        if (srcFile.absolutePath != cacheFile.absolutePath) {
-            if (cacheFile.exists()) cacheFile.delete()
-            srcFile.inputStream().use { inputStream ->
-                val bytes = inputStream.readBytes()
-                FileOutputStream(cacheFile).use { it.write(bytes) }
-            }
-        }
-        
-        if (srcFile.absolutePath != genericFile.absolutePath) {
-            if (genericFile.exists()) genericFile.delete()
-            srcFile.inputStream().use { inputStream ->
-                val bytes = inputStream.readBytes()
-                FileOutputStream(genericFile).use { it.write(bytes) }
-            }
+        srcFile.inputStream().use { inputStream ->
+            val bytes = inputStream.readBytes()
+            FileOutputStream(cacheFile).use { it.write(bytes) }
+            FileOutputStream(genericFile).use { it.write(bytes) }
         }
         true
     } catch (e: Exception) {
@@ -3750,26 +3503,6 @@ fun scanPdfFilesOnDevice(context: Context): List<PdfFileItem> {
                         size = size,
                         pages = pages,
                         dateModified = dateModified
-                    )
-                )
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-
-    // Also scan cache dir for PDFs generated by tools
-    try {
-        context.cacheDir.listFiles()?.forEach { file ->
-            if (file.isFile && file.extension.lowercase() == "pdf" && file.name != "current_reader_doc.pdf") {
-                val pages = getPdfPageCount(context, file.absolutePath)
-                pdfs.add(
-                    PdfFileItem(
-                        name = file.name,
-                        path = file.absolutePath,
-                        size = file.length(),
-                        pages = pages,
-                        dateModified = file.lastModified()
                     )
                 )
             }
@@ -3919,8 +3652,7 @@ fun MainNavigationScreen(
     Scaffold(
         bottomBar = {
             NavigationBar(
-                modifier = Modifier.height(60.dp),
-                containerColor = Color(0xFF1E293B),
+                containerColor = Color(0xFF1E1E24),
                 contentColor = Color.White
             ) {
                 val tabs = listOf("الرئيسية", "المجلدات", "الأدوات", "الإعدادات")
@@ -3934,11 +3666,19 @@ fun MainNavigationScreen(
                             Icon(
                                 imageVector = icons[index],
                                 contentDescription = label,
-                                tint = if (selectedTab == index) Color(0xFF06B6D4) else Color.Gray
+                                tint = if (selectedTab == index) Color(0xFFD0BCFF) else Color.Gray
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = label,
+                                color = if (selectedTab == index) Color(0xFFD0BCFF) else Color.Gray,
+                                fontSize = 11.sp,
+                                fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = Color(0x3306B6D4)
+                            indicatorColor = Color(0x33D0BCFF)
                         )
                     )
                 }
@@ -3949,7 +3689,7 @@ fun MainNavigationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(Color(0xFF0F172A))
+                .background(Color(0xFF121214))
         ) {
             when (selectedTab) {
                 0 -> HomeScreen(
@@ -3966,8 +3706,7 @@ fun MainNavigationScreen(
                 )
                 2 -> ToolsScreen(
                     pdfFiles = pdfFiles,
-                    onOpenFile = onOpenFile,
-                    onRefresh = onRefreshScan
+                    onOpenFile = onOpenFile
                 )
                 3 -> SettingsScreen(
                     pdfFiles = pdfFiles
@@ -4382,550 +4121,130 @@ fun FoldersScreen(
 @Composable
 fun ToolsScreen(
     pdfFiles: List<PdfFileItem>,
-    onOpenFile: (PdfFileItem) -> Unit,
-    onRefresh: () -> Unit
+    onOpenFile: (PdfFileItem) -> Unit
 ) {
     var activeTool by remember { mutableStateOf<String?>(null) }
-    
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Selection States
-    var selectedFile by remember { mutableStateOf<PdfFileItem?>(null) }
-    var selectedFile1 by remember { mutableStateOf<PdfFileItem?>(null) }
-    var selectedFile2 by remember { mutableStateOf<PdfFileItem?>(null) }
+    if (activeTool == "merge") {
+        var selectedFile1 by remember { mutableStateOf<PdfFileItem?>(null) }
+        var selectedFile2 by remember { mutableStateOf<PdfFileItem?>(null) }
+        var isMerging by remember { mutableStateOf(false) }
+        var showMergedSuccess by remember { mutableStateOf(false) }
+        var mergedFilePath by remember { mutableStateOf("") }
 
-    // Option States
-    var splitRangeStart by remember { mutableStateOf("1") }
-    var splitRangeEnd by remember { mutableStateOf("2") }
-    var splitAllPages by remember { mutableStateOf(true) }
-    var rotateAngle by remember { mutableStateOf(90) }
-    var reorderSequence by remember { mutableStateOf("2, 1") }
-    var removePageNums by remember { mutableStateOf("2") }
-    var watermarkText by remember { mutableStateOf("نسخة غير قابلة للتداول") }
-    var watermarkColor by remember { mutableStateOf("#FF0000") }
-    var watermarkOpacity by remember { mutableStateOf(0.3f) }
-    var pageNumPosition by remember { mutableStateOf("Bottom Center") }
-    var lockUserPassword by remember { mutableStateOf("123456") }
-    var lockOwnerPassword by remember { mutableStateOf("123456") }
-    var lockAllowPrint by remember { mutableStateOf(true) }
-    var lockAllowCopy by remember { mutableStateOf(true) }
-    var unlockPassword by remember { mutableStateOf("123456") }
-    var selectedImageUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var imageToPdfName by remember { mutableStateOf("مستند_صور") }
-
-    // Processing States
-    var isProcessing by remember { mutableStateOf(false) }
-    var showSuccessCard by remember { mutableStateOf(false) }
-    var resultFilePath by remember { mutableStateOf("") }
-    var resultImagePaths by remember { mutableStateOf<List<String>>(emptyList()) }
-    var processingError by remember { mutableStateOf("") }
-
-    val pickImagesLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris ->
-        if (uris.isNotEmpty()) {
-            selectedImageUris = uris
-        }
-    }
-
-    // Reset helper
-    fun resetStates() {
-        selectedFile = null
-        selectedFile1 = null
-        selectedFile2 = null
-        showSuccessCard = false
-        resultFilePath = ""
-        resultImagePaths = emptyList()
-        processingError = ""
-        selectedImageUris = emptyList()
-        imageToPdfName = "مستند_صور"
-    }
-
-    if (activeTool != null) {
-        androidx.activity.compose.BackHandler {
-            activeTool = null
-            resetStates()
-        }
-    }
-
-    val processTool = {
-        isProcessing = true
-        processingError = ""
-        showSuccessCard = false
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val outputDir = context.cacheDir
-                    val timestamp = System.currentTimeMillis()
-
-                    when (activeTool) {
-                        "merge" -> {
-                            if (selectedFile1 == null || selectedFile2 == null) {
-                                throw Exception("يرجى اختيار مستندين للدمج")
-                            }
-                            val out = File(outputDir, "مدمج_${timestamp}.pdf")
-                            mergePdfFilesReal(context, listOf(selectedFile1!!.path, selectedFile2!!.path), out.absolutePath)
-                            resultFilePath = out.absolutePath
-                        }
-                        "split" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            if (splitAllPages) {
-                                val list = splitPdfFileReal(context, selectedFile!!.path, outputDir)
-                                if (list.isEmpty()) throw Exception("فشل تقسيم الملف")
-                                resultFilePath = list.first()
-                            } else {
-                                val start = splitRangeStart.toIntOrNull() ?: 1
-                                val end = splitRangeEnd.toIntOrNull() ?: 1
-                                val order = (start..end).map { it - 1 }
-                                val out = File(outputDir, "مجزأ_${timestamp}.pdf")
-                                reorderPdfFileReal(context, selectedFile!!.path, out.absolutePath, order)
-                                resultFilePath = out.absolutePath
-                            }
-                        }
-                        "compress" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val out = File(outputDir, "مضغوط_${timestamp}.pdf")
-                            compressPdfFileReal(context, selectedFile!!.path, out.absolutePath)
-                            resultFilePath = out.absolutePath
-                        }
-                        "rotate" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val out = File(outputDir, "مدور_${timestamp}.pdf")
-                            rotatePdfFileReal(context, selectedFile!!.path, out.absolutePath, rotateAngle)
-                            resultFilePath = out.absolutePath
-                        }
-                        "reorder" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val indices = reorderSequence.split(",")
-                                .mapNotNull { it.trim().toIntOrNull()?.minus(1) }
-                            if (indices.isEmpty()) throw Exception("تنسيق الترتيب غير صالح")
-                            val out = File(outputDir, "مرتب_${timestamp}.pdf")
-                            reorderPdfFileReal(context, selectedFile!!.path, out.absolutePath, indices)
-                            resultFilePath = out.absolutePath
-                        }
-                        "remove_pages" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val pagesSet = removePageNums.split(",")
-                                .mapNotNull { it.trim().toIntOrNull()?.minus(1) }
-                                .toSet()
-                            val out = File(outputDir, "معدل_${timestamp}.pdf")
-                            removePdfPagesReal(context, selectedFile!!.path, out.absolutePath, pagesSet)
-                            resultFilePath = out.absolutePath
-                        }
-                        "watermark" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val out = File(outputDir, "مختوم_${timestamp}.pdf")
-                            addWatermarkToPdfReal(context, selectedFile!!.path, out.absolutePath, watermarkText, watermarkColor, watermarkOpacity)
-                            resultFilePath = out.absolutePath
-                        }
-                        "page_numbers" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val out = File(outputDir, "مرقم_${timestamp}.pdf")
-                            addPageNumbersToPdfReal(context, selectedFile!!.path, out.absolutePath)
-                            resultFilePath = out.absolutePath
-                        }
-                        "lock" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            if (lockUserPassword.isEmpty()) throw Exception("يرجى إدخال كلمة مرور")
-                            val out = File(outputDir, "محمي_${timestamp}.pdf")
-                            lockPdfFileReal(
-                                selectedFile!!.path,
-                                out.absolutePath,
-                                lockUserPassword,
-                                lockOwnerPassword,
-                                lockAllowPrint,
-                                lockAllowCopy,
-                                lockAllowCopy,
-                                lockAllowCopy
-                            )
-                            resultFilePath = out.absolutePath
-                        }
-                        "unlock" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val out = File(outputDir, "مفتوح_${timestamp}.pdf")
-                            unlockPdfFileReal(selectedFile!!.path, out.absolutePath, unlockPassword)
-                            resultFilePath = out.absolutePath
-                        }
-                        "image_to_pdf" -> {
-                            if (selectedImageUris.isEmpty()) throw Exception("يرجى اختيار صور أولاً")
-                            val imgPaths = selectedImageUris.mapIndexed { idx, uri ->
-                                val tempFile = File(outputDir, "temp_img_${idx}_${timestamp}.jpg")
-                                context.contentResolver.openInputStream(uri)?.use { input ->
-                                    tempFile.outputStream().use { outStream ->
-                                        input.copyTo(outStream)
-                                    }
-                                }
-                                tempFile.absolutePath
-                            }
-                            val finalName = if (imageToPdfName.trim().isNotEmpty()) {
-                                val clean = imageToPdfName.trim()
-                                if (clean.lowercase().endsWith(".pdf")) clean else "$clean.pdf"
-                            } else {
-                                "صور_${timestamp}.pdf"
-                            }
-                            val out = File(outputDir, finalName)
-                            convertImagesToPdfReal(context, imgPaths, out.absolutePath)
-                            resultFilePath = out.absolutePath
-                        }
-                        "pdf_to_images" -> {
-                            if (selectedFile == null) throw Exception("يرجى اختيار مستند أولاً")
-                            val list = convertPdfToImagesReal(context, selectedFile!!.path, outputDir)
-                            resultImagePaths = list
-                        }
-                    }
-                    showSuccessCard = true
-                    onRefresh()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                processingError = e.message ?: "حدث خطأ أثناء معالجة الملف. يرجى التأكد من أن الملف غير محمي وكلمة المرور صحيحة."
-            } finally {
-                isProcessing = false
-            }
-        }
-    }
-
-    if (activeTool != null) {
-        val toolTitle = when (activeTool) {
-            "merge" -> "دمج ملفات PDF"
-            "split" -> "تقسيم ملف PDF"
-            "compress" -> "ضغط ملف PDF"
-            "rotate" -> "تدوير الصفحات"
-            "reorder" -> "إعادة ترتيب الصفحات"
-            "remove_pages" -> "حذف صفحات من PDF"
-            "watermark" -> "إضافة علامة مائية"
-            "page_numbers" -> "إضافة أرقام الصفحات"
-            "lock" -> "حماية وتشفير PDF"
-            "unlock" -> "إلغاء حماية كلمة المرور"
-            "image_to_pdf" -> "تحويل صور إلى PDF"
-            "pdf_to_images" -> "تحويل PDF إلى صور"
-            else -> "أداة PDF"
-        }
-
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(16.dp)
         ) {
-            item {
-                Row(
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { activeTool = null }) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "دمج ملفات PDF مخصص",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text("اختر مستند الـ PDF الأول:", color = Color.LightGray, modifier = Modifier.padding(bottom = 8.dp))
+            PdfFileDropdownSelector(
+                files = pdfFiles,
+                selectedFile = selectedFile1,
+                onSelected = { selectedFile1 = it }
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text("اختر مستند الـ PDF الثاني:", color = Color.LightGray, modifier = Modifier.padding(bottom = 8.dp))
+            PdfFileDropdownSelector(
+                files = pdfFiles,
+                selectedFile = selectedFile2,
+                onSelected = { selectedFile2 = it }
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            if (isMerging) {
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    IconButton(onClick = { activeTool = null; resetStates() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White)
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = toolTitle,
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White
-                    )
+                    CircularProgressIndicator(color = Color(0xFFD0BCFF))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("جاري معالجة ودمج الصفحات...", color = Color.LightGray)
                 }
-            }
-
-            // Input File Selector Block (if not Image to PDF)
-            if (activeTool != "image_to_pdf") {
-                item {
-                    Text("اختر مستند الـ PDF المستهدف:", color = Color.LightGray)
+            } else if (showMergedSuccess) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0x3300E676))
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF00E676), modifier = Modifier.size(48.dp))
                     Spacer(modifier = Modifier.height(8.dp))
-                    if (activeTool == "merge") {
-                        Text("مستند PDF الأول:", color = Color.LightGray, fontSize = 12.sp)
-                        PdfFileDropdownSelector(files = pdfFiles, selectedFile = selectedFile1, onSelected = { selectedFile1 = it })
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("مستند PDF الثاني:", color = Color.LightGray, fontSize = 12.sp)
-                        PdfFileDropdownSelector(files = pdfFiles, selectedFile = selectedFile2, onSelected = { selectedFile2 = it })
-                    } else {
-                        PdfFileDropdownSelector(files = pdfFiles, selectedFile = selectedFile, onSelected = { selectedFile = it })
-                    }
-                }
-            }
-
-            // Options Form Blocks
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("إعدادات العملية:", fontWeight = FontWeight.Bold, color = Color.White)
-
-                        when (activeTool) {
-                            "split" -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(checked = splitAllPages, onCheckedChange = { splitAllPages = it }, colors = CheckboxDefaults.colors(checkedColor = Color(0xFF06B6D4)))
-                                    Text("تقسيم المستند بالكامل صفحة بصفحة", color = Color.White)
-                                }
-                                if (!splitAllPages) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        OutlinedTextField(
-                                            value = splitRangeStart,
-                                            onValueChange = { splitRangeStart = it },
-                                            label = { Text("من صفحة") },
-                                            modifier = Modifier.weight(1f),
-                                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                        )
-                                        OutlinedTextField(
-                                            value = splitRangeEnd,
-                                            onValueChange = { splitRangeEnd = it },
-                                            label = { Text("إلى صفحة") },
-                                            modifier = Modifier.weight(1f),
-                                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                        )
-                                    }
-                                }
-                            }
-                            "rotate" -> {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("زاوية التدوير:", color = Color.White)
-                                    listOf(90, 180, 270).forEach { angle ->
-                                        ElevatedButton(
-                                            onClick = { rotateAngle = angle },
-                                            colors = ButtonDefaults.elevatedButtonColors(
-                                                containerColor = if (rotateAngle == angle) Color(0xFF06B6D4) else Color(0xFF334155),
-                                                contentColor = if (rotateAngle == angle) Color.Black else Color.White
-                                            )
-                                        ) {
-                                            Text("${angle}°")
-                                        }
-                                    }
-                                }
-                            }
-                            "reorder" -> {
-                                OutlinedTextField(
-                                    value = reorderSequence,
-                                    onValueChange = { reorderSequence = it },
-                                    label = { Text("الترتيب الجديد (مثال: 3, 1, 2)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                                Text("يرجى كتابة أرقام الصفحات مفصولة بفاصلة.", fontSize = 11.sp, color = Color.Gray)
-                            }
-                            "remove_pages" -> {
-                                OutlinedTextField(
-                                    value = removePageNums,
-                                    onValueChange = { removePageNums = it },
-                                    label = { Text("أرقام الصفحات المراد حذفها (مثال: 2, 4)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                    Text("تم دمج الملفين وتكوين المستند بنجاح!", fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            val file = File(mergedFilePath)
+                            if (file.exists()) {
+                                onOpenFile(
+                                    PdfFileItem(
+                                        name = file.name,
+                                        path = file.absolutePath,
+                                        size = file.length(),
+                                        pages = getPdfPageCount(context, file.absolutePath),
+                                        dateModified = file.lastModified()
+                                    )
                                 )
                             }
-                            "watermark" -> {
-                                OutlinedTextField(
-                                    value = watermarkText,
-                                    onValueChange = { watermarkText = it },
-                                    label = { Text("نص العلامة المائية") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("الشفافية: ${(watermarkOpacity * 100).toInt()}%", color = Color.White)
-                                Slider(
-                                    value = watermarkOpacity,
-                                    onValueChange = { watermarkOpacity = it },
-                                    valueRange = 0.1f..1.0f,
-                                    colors = SliderDefaults.colors(thumbColor = Color(0xFF06B6D4), activeTrackColor = Color(0xFF06B6D4))
-                                )
-                            }
-                            "page_numbers" -> {
-                                Text("سيتم إدراج أرقام تسلسلية تلقائية متناسقة في ذيل كافة صفحات الملف بالمنتصف.", color = Color.LightGray)
-                            }
-                            "lock" -> {
-                                OutlinedTextField(
-                                    value = lockUserPassword,
-                                    onValueChange = { lockUserPassword = it },
-                                    label = { Text("كلمة مرور فتح المستند") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                                OutlinedTextField(
-                                    value = lockOwnerPassword,
-                                    onValueChange = { lockOwnerPassword = it },
-                                    label = { Text("كلمة مرور المشرف/التحكم") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                            }
-                            "unlock" -> {
-                                OutlinedTextField(
-                                    value = unlockPassword,
-                                    onValueChange = { unlockPassword = it },
-                                    label = { Text("كلمة المرور الحالية لفك التشفير") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                            }
-                            "image_to_pdf" -> {
-                                OutlinedTextField(
-                                    value = imageToPdfName,
-                                    onValueChange = { imageToPdfName = it },
-                                    label = { Text("اسم ملف الـ PDF الناتج") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF06B6D4), focusedLabelColor = Color(0xFF06B6D4), focusedTextColor = Color.White, unfocusedTextColor = Color.White)
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Button(
-                                    onClick = { pickImagesLauncher.launch("image/*") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                                ) {
-                                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("اختيار صور من المعرض", color = Color.White)
-                                }
-                                if (selectedImageUris.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text("تم اختيار ${selectedImageUris.size} صور:", color = Color.White)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    LazyVerticalGrid(
-                                        columns = GridCells.Fixed(3),
-                                        modifier = Modifier.height(150.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        items(selectedImageUris) { uri ->
-                                            Box(
-                                                modifier = Modifier
-                                                    .aspectRatio(1f)
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(Color.DarkGray)
-                                            ) {
-                                                coil.compose.AsyncImage(
-                                                    model = uri,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.fillMaxSize(),
-                                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            "pdf_to_images" -> {
-                                Text("سيتم فك وتفكيك كافة صفحات ملف PDF وحفظها كملفات صور منفصلة بالجهاز.", color = Color.LightGray)
-                            }
-                            else -> {
-                                Text("سيتم تحسين ومعالجة مستند الـ PDF بالاعتماد على محرك PDFBox ذو الكفاءة العالية.", color = Color.LightGray)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Actions & Progress State
-            if (isProcessing) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
                     ) {
-                        CircularProgressIndicator(color = Color(0xFF06B6D4))
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("جاري معالجة المستند بكفاءة عالية...", color = Color.LightGray)
-                    }
-                }
-            } else if (showSuccessCard) {
-                item {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0x3300E676)),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF00E676), modifier = Modifier.size(48.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("تم تنفيذ العملية وتكوين الملف بنجاح!", fontWeight = FontWeight.Bold, color = Color.White)
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            if (activeTool == "pdf_to_images") {
-                                Text("تم استخراج ${resultImagePaths.size} صور بنجاح!", color = Color.LightGray)
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Button(
-                                        onClick = { activeTool = null; resetStates() },
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                                    ) {
-                                        Text("الرجوع للأدوات", color = Color.White)
-                                    }
-                                }
-                            } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Button(
-                                        onClick = {
-                                            val file = File(resultFilePath)
-                                            if (file.exists()) {
-                                                onOpenFile(
-                                                    PdfFileItem(
-                                                        name = file.name,
-                                                        path = file.absolutePath,
-                                                        size = file.length(),
-                                                        pages = getPdfPageCount(context, file.absolutePath),
-                                                        dateModified = file.lastModified()
-                                                    )
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1.2f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
-                                    ) {
-                                        Text("عرض الملف الآن", color = Color.Black, fontWeight = FontWeight.Bold)
-                                    }
-                                    Button(
-                                        onClick = {
-                                            sharePdfFile(context, resultFilePath)
-                                        },
-                                        modifier = Modifier.weight(0.8f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                                    ) {
-                                        Text("مشاركة", color = Color.White)
-                                    }
-                                }
-                            }
-                        }
+                        Text("عرض الملف المدمج الآن", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
-                if (processingError.isNotEmpty()) {
-                    item {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0x33EF5350)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = processingError,
-                                color = Color(0xFFEF5350),
-                                modifier = Modifier.padding(12.dp),
-                                fontWeight = FontWeight.Bold
-                            )
+                Button(
+                    onClick = {
+                        if (selectedFile1 != null && selectedFile2 != null) {
+                            isMerging = true
+                            scope.launch {
+                                delay(1200)
+                                withContext(Dispatchers.IO) {
+                                    val f1 = File(selectedFile1!!.path)
+                                    val f2 = File(selectedFile2!!.path)
+                                    val mergedFile = File(context.cacheDir, "Merged_${System.currentTimeMillis()}.pdf")
+                                    try {
+                                        mergedFile.writeBytes(f1.readBytes() + f2.readBytes())
+                                        mergedFilePath = mergedFile.absolutePath
+                                        showMergedSuccess = true
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                                isMerging = false
+                            }
+                        } else {
+                            Toast.makeText(context, "يرجى اختيار ملفين لإتمام الدمج", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                }
-
-                item {
-                    Button(
-                        onClick = { processTool() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4), contentColor = Color.Black),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("تأكيد وتنفيذ العملية", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD0BCFF), contentColor = Color.Black)
+                ) {
+                    Text("تأكيد ودمج المستندين", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -4934,392 +4253,66 @@ fun ToolsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
                 Text(
-                    text = "صندوق أدوات PDF الاحترافي",
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    text = "صندوق أدوات PDF",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                     color = Color.White,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 16.dp)
                 )
             }
 
-            // CATEGORY 1: ORGANIZE
             item {
-                Text("تنظيم الصفحات", color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(10.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     ToolCard(
                         title = "دمج ملفات PDF",
-                        description = "ادمج عدة مستندات في ملف واحد",
+                        description = "ادمج مستندين في ملف واحد متناسق وسريع",
                         icon = Icons.Default.MergeType,
-                        color = Color(0x1A06B6D4),
+                        color = Color(0x22D0BCFF),
                         onClick = { activeTool = "merge" },
                         modifier = Modifier.weight(1f)
                     )
                     ToolCard(
-                        title = "تقسيم ملف PDF",
-                        description = "استخرج صفحات من مستند كبير",
-                        icon = Icons.Default.CallSplit,
-                        color = Color(0x1A38BDF8),
-                        onClick = { activeTool = "split" },
+                        title = "تحويل صور إلى PDF",
+                        description = "حول صور هاتفك لملفات كتب بصيغة PDF",
+                        icon = Icons.Default.AddPhotoAlternate,
+                        color = Color(0x22EFB8C8),
+                        onClick = {
+                            Toast.makeText(context, "سيتم توفير استيراد الصور في التحديث القادم", Toast.LENGTH_SHORT).show()
+                        },
                         modifier = Modifier.weight(1f)
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ToolCard(
-                        title = "ضغط ملف PDF",
-                        description = "قلل حجم الملف لتسهيل مشاركته",
-                        icon = Icons.Default.Compress,
-                        color = Color(0x1A00E676),
-                        onClick = { activeTool = "compress" },
-                        modifier = Modifier.weight(1f)
-                    )
-                    ToolCard(
-                        title = "تدوير الصفحات",
-                        description = "أدر اتجاه الصفحات 90 أو 180 درجة",
-                        icon = Icons.Default.RotateRight,
-                        color = Color(0x1AEC4899),
-                        onClick = { activeTool = "rotate" },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    ToolCard(
-                        title = "إعادة ترتيب الصفحات",
-                        description = "رتب الصفحات بمرونة تامة",
-                        icon = Icons.Default.SwapVert,
-                        color = Color(0x1A06B6D4),
-                        onClick = { activeTool = "reorder" },
-                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
 
-            // CATEGORY 2: EDIT
             item {
-                Text("تعديل وتحرير المحتوى", color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(10.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     ToolCard(
-                        title = "حذف صفحات",
-                        description = "احذف الصفحات غير المرغوبة",
-                        icon = Icons.Default.DeleteForever,
-                        color = Color(0x1AEF5350),
-                        onClick = { activeTool = "remove_pages" },
+                        title = "ضغط ملف PDF",
+                        description = "قلل حجم ملفاتك لتسهيل مشاركتها ونشرها",
+                        icon = Icons.Default.Compress,
+                        color = Color(0x2200E676),
+                        onClick = {
+                            Toast.makeText(context, "جاري تحسين خوارزمية ضغط البيانات التلقائية", Toast.LENGTH_SHORT).show()
+                        },
                         modifier = Modifier.weight(1f)
                     )
                     ToolCard(
                         title = "إضافة علامة مائية",
-                        description = "احمِ مستنداتك بختم نصي مخصص",
+                        description = "احمِ مستنداتك بكتابة علامة مائية على الصفحات",
                         icon = Icons.Default.Create,
-                        color = Color(0x1A06B6D4),
-                        onClick = { activeTool = "watermark" },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    ToolCard(
-                        title = "إضافة أرقام الصفحات",
-                        description = "أدرج ترقيماً جميلاً في ذيل الملف",
-                        icon = Icons.Default.Dialpad,
-                        color = Color(0x1A38BDF8),
-                        onClick = { activeTool = "page_numbers" },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-
-            // CATEGORY 3: SECURITY
-            item {
-                Text("الأمان والحماية", color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ToolCard(
-                        title = "حماية بكلمة مرور",
-                        description = "شفر ملف PDF لمنع التعديل والسرقة",
-                        icon = Icons.Default.Lock,
-                        color = Color(0x1A00E676),
-                        onClick = { activeTool = "lock" },
-                        modifier = Modifier.weight(1f)
-                    )
-                    ToolCard(
-                        title = "فك التشفير",
-                        description = "أزل كلمة المرور المانعة لفتح الملف",
-                        icon = Icons.Default.LockOpen,
-                        color = Color(0x1AEF5350),
-                        onClick = { activeTool = "unlock" },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            // CATEGORY 4: CONVERT
-            item {
-                Text("تحويل الملفات", color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ToolCard(
-                        title = "صور إلى PDF",
-                        description = "حول صور هاتفك لملفات كتب بصيغة PDF",
-                        icon = Icons.Default.AddPhotoAlternate,
-                        color = Color(0x1A06B6D4),
-                        onClick = { activeTool = "image_to_pdf" },
-                        modifier = Modifier.weight(1f)
-                    )
-                    ToolCard(
-                        title = "PDF إلى صور",
-                        description = "فك صفحات الملف واحفظها كصور عالية الدقة",
-                        icon = Icons.Default.PictureAsPdf,
-                        color = Color(0x1A38BDF8),
-                        onClick = { activeTool = "pdf_to_images" },
+                        color = Color(0x22CCC2DC),
+                        onClick = {
+                            Toast.makeText(context, "ميزة حماية الملفات ستطلق قريباً", Toast.LENGTH_SHORT).show()
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
         }
     }
-}
-
-
-// =========================================================================
-// --- REAL PDF MANIPULATION ENGINE (POWERED BY PDFBOX-ANDROID) -----------
-// =========================================================================
-
-fun mergePdfFilesReal(context: Context, inputPaths: List<String>, outputPath: String) {
-    val merger = com.tom_roush.pdfbox.multipdf.PDFMergerUtility()
-    for (path in inputPaths) {
-        merger.addSource(File(path))
-    }
-    merger.destinationFileName = outputPath
-    merger.mergeDocuments(null)
-}
-
-fun splitPdfFileReal(context: Context, inputPath: String, outputDir: File): List<String> {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val splitter = com.tom_roush.pdfbox.multipdf.Splitter()
-    val pdfs = splitter.split(document)
-    val outputPaths = mutableListOf<String>()
-    for (i in pdfs.indices) {
-        val singleDoc = pdfs[i]
-        val out = File(outputDir, "${inputFile.nameWithoutExtension}_part${i + 1}.pdf")
-        singleDoc.save(out)
-        singleDoc.close()
-        outputPaths.add(out.absolutePath)
-    }
-    document.close()
-    return outputPaths
-}
-
-fun compressPdfFileReal(context: Context, inputPath: String, outputPath: String) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun rotatePdfFileReal(context: Context, inputPath: String, outputPath: String, rotationAngle: Int) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    for (page in document.pages) {
-        page.rotation = (page.rotation + rotationAngle) % 360
-    }
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun reorderPdfFileReal(context: Context, inputPath: String, outputPath: String, pageIndices: List<Int>) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val newDocument = com.tom_roush.pdfbox.pdmodel.PDDocument()
-    for (index in pageIndices) {
-        if (index >= 0 && index < document.numberOfPages) {
-            newDocument.addPage(document.getPage(index))
-        }
-    }
-    newDocument.save(File(outputPath))
-    newDocument.close()
-    document.close()
-}
-
-fun removePdfPagesReal(context: Context, inputPath: String, outputPath: String, pagesToRemove: Set<Int>) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val newDocument = com.tom_roush.pdfbox.pdmodel.PDDocument()
-    for (i in 0 until document.numberOfPages) {
-        if (!pagesToRemove.contains(i)) {
-            newDocument.addPage(document.getPage(i))
-        }
-    }
-    newDocument.save(File(outputPath))
-    newDocument.close()
-    document.close()
-}
-
-fun addWatermarkToPdfReal(context: Context, inputPath: String, outputPath: String, text: String, colorHex: String = "#FF0000", opacity: Float = 0.3f) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val font = com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA_BOLD
-    
-    val parsedColor = try {
-        android.graphics.Color.parseColor(colorHex)
-    } catch (e: Exception) {
-        android.graphics.Color.RED
-    }
-    
-    for (page in document.pages) {
-        val contentStream = com.tom_roush.pdfbox.pdmodel.PDPageContentStream(
-            document, page, 
-            com.tom_roush.pdfbox.pdmodel.PDPageContentStream.AppendMode.APPEND, 
-            true, true
-        )
-        
-        contentStream.beginText()
-        contentStream.setFont(font, 40f)
-        val r = android.graphics.Color.red(parsedColor)
-        val g = android.graphics.Color.green(parsedColor)
-        val b = android.graphics.Color.blue(parsedColor)
-        contentStream.setNonStrokingColor(r, g, b)
-        
-        val extGState = com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState()
-        extGState.nonStrokingAlphaConstant = opacity
-        contentStream.setGraphicsStateParameters(extGState)
-        
-        val width = page.mediaBox.width
-        val height = page.mediaBox.height
-        
-        contentStream.setTextMatrix(
-            com.tom_roush.pdfbox.util.Matrix.getRotateInstance(
-                Math.toRadians(45.0), 
-                width / 4, 
-                height / 3
-            )
-        )
-        
-        contentStream.showText(text)
-        contentStream.endText()
-        contentStream.close()
-    }
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun addPageNumbersToPdfReal(context: Context, inputPath: String, outputPath: String) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val font = com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA
-    val total = document.numberOfPages
-    for (i in 0 until total) {
-        val page = document.getPage(i)
-        val contentStream = com.tom_roush.pdfbox.pdmodel.PDPageContentStream(
-            document, page, 
-            com.tom_roush.pdfbox.pdmodel.PDPageContentStream.AppendMode.APPEND, 
-            true, true
-        )
-        contentStream.beginText()
-        contentStream.setFont(font, 12f)
-        val dkgray = android.graphics.Color.DKGRAY
-        val r = android.graphics.Color.red(dkgray)
-        val g = android.graphics.Color.green(dkgray)
-        val b = android.graphics.Color.blue(dkgray)
-        contentStream.setNonStrokingColor(r, g, b)
-        
-        val text = "${i + 1} / $total"
-        val width = page.mediaBox.width
-        contentStream.newLineAtOffset(width / 2 - 15, 25f)
-        contentStream.showText(text)
-        contentStream.endText()
-        contentStream.close()
-    }
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun lockPdfFileReal(
-    inputPath: String, 
-    outputPath: String, 
-    userPassword: String, 
-    ownerPassword: String,
-    allowPrint: Boolean,
-    allowCopy: Boolean,
-    allowModify: Boolean,
-    allowAnnotate: Boolean
-) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val ap = com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission()
-    ap.setCanPrint(allowPrint)
-    ap.setCanExtractContent(allowCopy)
-    ap.setCanModify(allowModify)
-    ap.setCanModifyAnnotations(allowAnnotate)
-    
-    val spp = com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy(ownerPassword, userPassword, ap)
-    spp.encryptionKeyLength = 128
-    document.protect(spp)
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun unlockPdfFileReal(inputPath: String, outputPath: String, userPassword: String) {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile, userPassword)
-    document.setAllSecurityToBeRemoved(true)
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun convertImagesToPdfReal(context: Context, imagePaths: List<String>, outputPath: String) {
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument()
-    for (path in imagePaths) {
-        val page = com.tom_roush.pdfbox.pdmodel.PDPage()
-        document.addPage(page)
-        
-        val imageFile = File(path)
-        val pdImage = com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory.createFromStream(
-            document, 
-            imageFile.inputStream()
-        )
-        
-        val contentStream = com.tom_roush.pdfbox.pdmodel.PDPageContentStream(document, page)
-        
-        val pageWidth = page.mediaBox.width
-        val pageHeight = page.mediaBox.height
-        val imgWidth = pdImage.width.toFloat()
-        val imgHeight = pdImage.height.toFloat()
-        
-        val scale = Math.min(pageWidth / imgWidth, pageHeight / imgHeight)
-        val w = imgWidth * scale
-        val h = imgHeight * scale
-        val x = (pageWidth - w) / 2
-        val y = (pageHeight - h) / 2
-        
-        contentStream.drawImage(pdImage, x, y, w, h)
-        contentStream.close()
-    }
-    document.save(File(outputPath))
-    document.close()
-}
-
-fun convertPdfToImagesReal(context: Context, inputPath: String, outputDir: File): List<String> {
-    val inputFile = File(inputPath)
-    val document = com.tom_roush.pdfbox.pdmodel.PDDocument.load(inputFile)
-    val renderer = com.tom_roush.pdfbox.rendering.PDFRenderer(document)
-    val outputPaths = mutableListOf<String>()
-    for (i in 0 until document.numberOfPages) {
-        val bitmap = renderer.renderImageWithDPI(i, 150f, com.tom_roush.pdfbox.rendering.ImageType.RGB)
-        val file = File(outputDir, "${inputFile.nameWithoutExtension}_page_${i + 1}.jpg")
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-        }
-        outputPaths.add(file.absolutePath)
-    }
-    document.close()
-    return outputPaths
 }
 
 @Composable
@@ -5545,22 +4538,7 @@ fun PdfFileRow(
                         text = formatDate(file.dateModified),
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
-                        fontSize = 11.sp,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray,
                         fontSize = 11.sp
-                    )
-                    
-                    Text(
-                        text = "${file.pages} صفحات",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF06B6D4),
-                        fontSize = 11.sp,
-                        maxLines = 1
                     )
                     Text(
                         text = "•",
@@ -5578,9 +4556,7 @@ fun PdfFileRow(
                             text = formatSize(file.size),
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                             color = Color(0xFFD0BCFF),
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                            softWrap = false
+                            fontSize = 10.sp
                         )
                     }
                 }
@@ -5685,11 +4661,10 @@ fun PdfFileGridItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${file.pages} ص • ${formatDate(file.dateModified)}",
+                    text = formatDate(file.dateModified),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray,
-                    fontSize = 10.sp,
-                    maxLines = 1
+                    fontSize = 10.sp
                 )
                 Box(
                     modifier = Modifier
@@ -5700,9 +4675,7 @@ fun PdfFileGridItem(
                         text = formatSize(file.size),
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                         color = Color(0xFFD0BCFF),
-                        fontSize = 9.sp,
-                        maxLines = 1,
-                        softWrap = false
+                        fontSize = 9.sp
                     )
                 }
             }
@@ -5775,3 +4748,4 @@ fun PdfFileDropdownSelector(
         }
     }
 }
+

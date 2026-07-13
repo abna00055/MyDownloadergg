@@ -10011,8 +10011,6 @@ class TextLayerBuilder {
     });
     var isFirefox, prevRange;
     document.addEventListener("selectionchange", () => {
-      // Radical fix for mobile/WebView selection: Disable dynamic DOM updates during text selection
-      return;
       const selection = document.getSelection();
       if (selection.rangeCount === 0) {
         this.#textLayers.forEach(reset);
