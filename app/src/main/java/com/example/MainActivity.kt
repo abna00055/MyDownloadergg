@@ -1087,40 +1087,15 @@ fun PDFReaderScreen(
                                                     }
                                                 });
 
-                                                // Custom gesture and tap handling
-                                                function isInteractive(element) {
-                                                    var el = element;
-                                                    while (el) {
-                                                        if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.tagName === 'INPUT' || (el.classList && el.classList.contains('clickable'))) {
-                                                            return true;
-                                                        }
-                                                        el = el.parentNode;
-                                                    }
-                                                    return false;
-                                                }
-
-                                                var startTouchX = 0;
-                                                var startTouchY = 0;
-                                                var wasPinching = false;
-                                                var wasSelecting = false;
-
-                                                document.addEventListener('touchend', function(e) {
-                                                    if (e.changedTouches.length === 1 && !wasPinching && !wasSelecting) {
-                                                        var touch = e.changedTouches[0];
-                                                        if (Math.hypot(touch.clientX - startTouchX, touch.clientY - startTouchY) < 15) {
-                                                            if (typeof AndroidBridge !== 'undefined') {
-                                                                AndroidBridge.onDocumentClicked();
-                                                            }
+                                                // Tap handling to hide/show app bars
+                                                document.addEventListener('click', function(e) {
+                                                    if (!e.target.closest('.textLayer') && 
+                                                        !e.target.closest('a')) {
+                                                        if (typeof AndroidBridge !== 'undefined') {
+                                                            AndroidBridge.onDocumentClicked();
                                                         }
                                                     }
-                                                }, { passive: true });
-
-                                                document.addEventListener('touchstart', function(e) {
-                                                    if (e.touches.length === 1) {
-                                                        startTouchX = e.touches[0].clientX;
-                                                        startTouchY = e.touches[0].clientY;
-                                                    }
-                                                }, { passive: true });
+                                                });
                                                 
                                                 // Intercept all document links to play audio or show standard web links in embedded browser
                                                 document.addEventListener('click', function(e) {
