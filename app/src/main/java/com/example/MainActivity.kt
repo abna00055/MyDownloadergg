@@ -956,11 +956,11 @@ fun PDFReaderScreen(
                             allowContentAccess = true
                             domStorageEnabled = true
                             databaseEnabled = true
-                            useWideViewPort = false
-                            loadWithOverviewMode = false
-                            builtInZoomControls = false
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
+                            builtInZoomControls = true
                             displayZoomControls = false
-                            setSupportZoom(false)
+                            setSupportZoom(true)
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -1017,13 +1017,7 @@ fun PDFReaderScreen(
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                     #viewerContainer { top: 0 !important; bottom: 0 !important; }
                                     body { background-color: transparent !important; }
-                                    .textLayer *::selection {
-                                        background: rgba(0, 122, 255, 0.3) !important;
-                                        color: transparent !important;
-                                    }
-                                    .textLayer .endOfContent {
-                                        display: none !important;
-                                    }
+                                    .textLayer .endOfContent { display: none !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1035,11 +1029,11 @@ fun PDFReaderScreen(
                                     // Ensure viewport allows native zoom and scaling perfectly
                                     var meta = document.querySelector('meta[name="viewport"]');
                                     if (meta) {
-                                        meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes');
+                                        meta.setAttribute('content', 'width=device-width, initial-scale=1.0');
                                     } else {
                                         meta = document.createElement('meta');
                                         meta.name = 'viewport';
-                                        meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes';
+                                        meta.content = 'width=device-width, initial-scale=1.0';
                                         document.head.appendChild(meta);
                                     }
                                 """.trimIndent()
