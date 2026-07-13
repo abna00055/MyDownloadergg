@@ -1078,6 +1078,24 @@ fun PDFReaderScreen(
                                                         window.initialPdfScale = PDFViewerApplication.pdfViewer.currentScale;
                                                     }
                                                 });
+                                                
+                                                PDFViewerApplication.eventBus.on('textlayerrendered', function() {
+                                                    document.querySelectorAll('.textLayer').forEach(function(layer) {
+                                                        layer.addEventListener('touchstart', function(e) {
+                                                            if (e.touches.length === 1) {
+                                                                var container = document.getElementById('viewerContainer');
+                                                                if (container) container.style.touchAction = 'none';
+                                                            }
+                                                        }, { passive: true });
+                                                        
+                                                        layer.addEventListener('touchend', function() {
+                                                            setTimeout(function() {
+                                                                var container = document.getElementById('viewerContainer');
+                                                                if (container) container.style.touchAction = 'auto';
+                                                            }, 300);
+                                                        }, { passive: true });
+                                                    });
+                                                });
                                                 PDFViewerApplication.eventBus.on('updatefindmatchescount', function(e) {
                                                     if (typeof AndroidBridge !== 'undefined' && e.matchesCount) {
                                                         AndroidBridge.onSearchMatchesChanged(e.matchesCount.current, e.matchesCount.total);
