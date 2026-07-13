@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "PDF Reader"
+rootProject.name = "FinalPDF"
 
 include(":app")
