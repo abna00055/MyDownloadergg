@@ -1197,7 +1197,34 @@ fun PDFReaderScreen(
                                 """.trimIndent()
                                 view?.evaluateJavascript(bridgeSetup, null)
 
-                                 
+                                view?.evaluateJavascript("""
+                                (function() {
+                                    if (typeof PDFViewerApplication === 'undefined') return;
+                                    
+                                    PDFViewerApplication.eventBus.on('textlayerrendered', function(e) {
+                                        var pageDiv = document.querySelector(
+                                            '.page[data-page-number="' + e.pageNumber + '"]'
+                                        );
+                                        if (!pageDiv) return;
+                                        
+                                        var textLayer = pageDiv.querySelector('.textLayer');
+                                        if (!textLayer) return;
+                                        
+                                        var spans = textLayer.querySelectorAll('span[role="presentation"]');
+                                        spans.forEach(function(span) {
+                                            span.removeAttribute('role');
+                                            var rect = span.getBoundingClientRect();
+                                            var parentRect = textLayer.getBoundingClientRect();
+                                            span.style.transform = 'none';
+                                            span.style.left = (rect.left - parentRect.left) + 'px';
+                                            span.style.top = (rect.top - parentRect.top) + 'px';
+                                            span.style.position = 'absolute';
+                                            span.style.fontSize = rect.height + 'px';
+                                            span.style.width = rect.width + 'px';
+                                        });
+                                    });
+                                })();
+                                """, null)
 
                                 // Re-apply current reading mode visual background filters
                                 applyReaderTheme(currentTheme)
