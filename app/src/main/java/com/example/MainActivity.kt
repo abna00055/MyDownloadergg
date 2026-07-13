@@ -1143,6 +1143,30 @@ fun PDFReaderScreen(
                                             }
                                         }
 
+                                        var savedScrollTop = 0;
+                                        var isSelectingText = false;
+
+                                        document.addEventListener('selectionchange', function() {
+                                            var sel = window.getSelection();
+                                            var container = document.getElementById('viewerContainer');
+                                            if (!container) return;
+                                            
+                                            if (sel && sel.toString().length > 0) {
+                                                if (!isSelectingText) {
+                                                    isSelectingText = true;
+                                                    savedScrollTop = container.scrollTop;
+                                                }
+                                            } else {
+                                                isSelectingText = false;
+                                            }
+                                        });
+
+                                        document.getElementById('viewerContainer').addEventListener('scroll', function() {
+                                            if (isSelectingText) {
+                                                this.scrollTop = savedScrollTop;
+                                            }
+                                        });
+
                                         function setupBridge() {
                                             if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.initializedPromise) {
                                                 PDFViewerApplication.initializedPromise.then(initEvents);
