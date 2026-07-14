@@ -738,9 +738,9 @@ fun PDFReaderScreen(
                 document.head.appendChild(styleEl);
             }
             styleEl.innerHTML = 'document, html { background-color: $bg !important; } .page { background-color: $bg !important; }';
-            document.documentElement.style.filter = '$filter';
             var container = document.getElementById('viewerContainer');
             if (container) {
+                container.style.filter = '$filter';
                 container.style.backgroundColor = '$bg';
             }
         """.trimIndent()
@@ -1015,7 +1015,7 @@ fun PDFReaderScreen(
                                 // Inject CSS to hide default controls and padding to let document float beautifully
                                 val css = """
                                     #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
-                                    #viewerContainer { top: 0 !important; bottom: 0 !important; }
+                                    #viewerContainer { top: 0 !important; bottom: 0 !important; overflow-anchor: none; }
                                     body { background-color: transparent !important; }
                                     .textLayer *::selection {
                                         background: rgba(0, 122, 255, 0.3) !important;
@@ -1146,29 +1146,7 @@ fun PDFReaderScreen(
                                             }
                                         }
 
-                                        var savedScrollTop = 0;
-                                        var isSelectingText = false;
 
-                                        document.addEventListener('selectionchange', function() {
-                                            var sel = window.getSelection();
-                                            var container = document.getElementById('viewerContainer');
-                                            if (!container) return;
-                                            
-                                            if (sel && sel.toString().length > 0) {
-                                                if (!isSelectingText) {
-                                                    isSelectingText = true;
-                                                    savedScrollTop = container.scrollTop;
-                                                }
-                                            } else {
-                                                isSelectingText = false;
-                                            }
-                                        });
-
-                                        document.getElementById('viewerContainer').addEventListener('scroll', function() {
-                                            if (isSelectingText) {
-                                                this.scrollTop = savedScrollTop;
-                                            }
-                                        });
 
                                         function setupBridge() {
                                             if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.initializedPromise) {
