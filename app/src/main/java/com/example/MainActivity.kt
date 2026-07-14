@@ -1147,33 +1147,41 @@ fun PDFReaderScreen(
                                         }
 
                                         (function() {
-                                            var isSelecting = false;
-                                            var lastScrollTop = 0;
-                                            var MAX_DELTA = 3;
                                             var container = null;
+                                            var isTouching = false;
+                                            var startScrollTop = 0;
+                                            var MAX_TOTAL_DELTA = 300;
 
-                                            document.addEventListener('selectionchange', function() {
-                                                var sel = window.getSelection();
+                                            function getContainer() {
                                                 if (!container) container = document.getElementById('viewerContainer');
-                                                if (sel && sel.toString().length > 0) {
-                                                    if (!isSelecting) {
-                                                        isSelecting = true;
-                                                        lastScrollTop = container ? container.scrollTop : 0;
-                                                    }
-                                                } else {
-                                                    isSelecting = false;
+                                                return container;
+                                            }
+
+                                            document.addEventListener('touchstart', function() {
+                                                var sel = window.getSelection();
+                                                var c = getContainer();
+                                                if (sel && sel.toString().length > 0 && c) {
+                                                    isTouching = true;
+                                                    startScrollTop = c.scrollTop;
                                                 }
-                                            });
+                                            }, true);
+
+                                            document.addEventListener('touchend', function() {
+                                                isTouching = false;
+                                            }, true);
+
+                                            document.addEventListener('touchcancel', function() {
+                                                isTouching = false;
+                                            }, true);
 
                                             document.addEventListener('scroll', function(e) {
-                                                if (!isSelecting) return;
-                                                if (!container) container = document.getElementById('viewerContainer');
-                                                if (!container || e.target !== container) return;
-                                                var delta = container.scrollTop - lastScrollTop;
-                                                if (Math.abs(delta) > MAX_DELTA) {
-                                                    container.scrollTop = lastScrollTop + (delta > 0 ? MAX_DELTA : -MAX_DELTA);
+                                                if (!isTouching) return;
+                                                var c = getContainer();
+                                                if (!c || e.target !== c) return;
+                                                var totalDelta = c.scrollTop - startScrollTop;
+                                                if (Math.abs(totalDelta) > MAX_TOTAL_DELTA) {
+                                                    c.scrollTop = startScrollTop + (totalDelta > 0 ? MAX_TOTAL_DELTA : -MAX_TOTAL_DELTA);
                                                 }
-                                                lastScrollTop = container.scrollTop;
                                             }, true);
                                         })();
 
