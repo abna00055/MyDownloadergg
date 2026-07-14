@@ -1146,6 +1146,37 @@ fun PDFReaderScreen(
                                             }
                                         }
 
+                                        (function() {
+                                            var isSelecting = false;
+                                            var lastScrollTop = 0;
+                                            var MAX_DELTA = 20;
+                                            var container = null;
+
+                                            document.addEventListener('selectionchange', function() {
+                                                var sel = window.getSelection();
+                                                if (!container) container = document.getElementById('viewerContainer');
+                                                if (sel && sel.toString().length > 0) {
+                                                    if (!isSelecting) {
+                                                        isSelecting = true;
+                                                        lastScrollTop = container ? container.scrollTop : 0;
+                                                    }
+                                                } else {
+                                                    isSelecting = false;
+                                                }
+                                            });
+
+                                            document.addEventListener('scroll', function(e) {
+                                                if (!isSelecting) return;
+                                                if (!container) container = document.getElementById('viewerContainer');
+                                                if (!container || e.target !== container) return;
+                                                var delta = container.scrollTop - lastScrollTop;
+                                                if (Math.abs(delta) > MAX_DELTA) {
+                                                    container.scrollTop = lastScrollTop + (delta > 0 ? MAX_DELTA : -MAX_DELTA);
+                                                }
+                                                lastScrollTop = container.scrollTop;
+                                            }, true);
+                                        })();
+
 
 
                                         function setupBridge() {
