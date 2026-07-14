@@ -1148,40 +1148,50 @@ fun PDFReaderScreen(
 
                                         (function() {
                                             var container = null;
-                                            var isTouching = false;
-                                            var startScrollTop = 0;
-                                            var MAX_TOTAL_DELTA = 300;
+                                            var lastScrollTop = 0;
+                                            var userIsTouchingPage = false;
+                                            var MAX_AUTO_SCROLL_DELTA = 15;
 
                                             function getContainer() {
-                                                if (!container) container = document.getElementById('viewerContainer');
+                                                if (!container) {
+                                                    container = document.getElementById('viewerContainer');
+                                                    if (container) {
+                                                        lastScrollTop = container.scrollTop;
+                                                    }
+                                                }
                                                 return container;
                                             }
 
                                             document.addEventListener('touchstart', function() {
-                                                var sel = window.getSelection();
-                                                var c = getContainer();
-                                                if (sel && sel.toString().length > 0 && c) {
-                                                    isTouching = true;
-                                                    startScrollTop = c.scrollTop;
-                                                }
+                                                userIsTouchingPage = true;
+                                            }, true);
+
+                                            document.addEventListener('touchmove', function() {
+                                                userIsTouchingPage = true;
                                             }, true);
 
                                             document.addEventListener('touchend', function() {
-                                                isTouching = false;
+                                                userIsTouchingPage = false;
                                             }, true);
 
                                             document.addEventListener('touchcancel', function() {
-                                                isTouching = false;
+                                                userIsTouchingPage = false;
                                             }, true);
 
                                             document.addEventListener('scroll', function(e) {
-                                                if (!isTouching) return;
                                                 var c = getContainer();
                                                 if (!c || e.target !== c) return;
-                                                var totalDelta = c.scrollTop - startScrollTop;
-                                                if (Math.abs(totalDelta) > MAX_TOTAL_DELTA) {
-                                                    c.scrollTop = startScrollTop + (totalDelta > 0 ? MAX_TOTAL_DELTA : -MAX_TOTAL_DELTA);
+
+                                                var sel = window.getSelection();
+                                                var hasSelection = sel && sel.toString().trim().length > 0;
+
+                                                if (hasSelection && !userIsTouchingPage) {
+                                                    var delta = c.scrollTop - lastScrollTop;
+                                                    if (Math.abs(delta) > MAX_AUTO_SCROLL_DELTA) {
+                                                        c.scrollTop = lastScrollTop + (delta > 0 ? MAX_AUTO_SCROLL_DELTA : -MAX_AUTO_SCROLL_DELTA);
+                                                    }
                                                 }
+                                                lastScrollTop = c.scrollTop;
                                             }, true);
                                         })();
 
