@@ -1149,7 +1149,7 @@ fun PDFReaderScreen(
                                         (function() {
                                             var isSelecting = false;
                                             var lastScrollTop = 0;
-                                            var MAX_DELTA = 20;
+                                            var MAX_DELTA = 3;
                                             var container = null;
 
                                             document.addEventListener('selectionchange', function() {
