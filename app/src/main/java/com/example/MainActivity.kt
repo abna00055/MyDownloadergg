@@ -1017,6 +1017,13 @@ fun PDFReaderScreen(
                                      #toolbarContainer, .toolbar, #sidebarContainer, #secondaryToolbar { display: none !important; }
                                      #viewerContainer { top: 0 !important; bottom: 0 !important; overflow-anchor: none; }
                                      body { background-color: transparent !important; }
+                                     .textLayer *::selection {
+                                         background: rgba(0, 122, 255, 0.3) !important;
+                                         color: transparent !important;
+                                     }
+                                     .textLayer .endOfContent {
+                                         display: none !important;
+                                     }
                                  """.trimIndent()
 
                                  val styleInjection = """
@@ -1128,9 +1135,44 @@ fun PDFReaderScreen(
                                             }
                                         }
 
-                                        
+                                        (function() {
+                                            var container = null;
+                                            var isTouching = false;
+                                            var startScrollTop = 0;
+                                            var MAX_TOTAL_DELTA = 300;
 
+                                            function getContainer() {
+                                                if (!container) container = document.getElementById('viewerContainer');
+                                                return container;
+                                            }
 
+                                            document.addEventListener('touchstart', function() {
+                                                var sel = window.getSelection();
+                                                var c = getContainer();
+                                                if (sel && sel.toString().length > 0 && c) {
+                                                    isTouching = true;
+                                                    startScrollTop = c.scrollTop;
+                                                }
+                                            }, true);
+
+                                            document.addEventListener('touchend', function() {
+                                                isTouching = false;
+                                            }, true);
+
+                                            document.addEventListener('touchcancel', function() {
+                                                isTouching = false;
+                                            }, true);
+
+                                            document.addEventListener('scroll', function(e) {
+                                                if (!isTouching) return;
+                                                var c = getContainer();
+                                                if (!c || e.target !== c) return;
+                                                var totalDelta = c.scrollTop - startScrollTop;
+                                                if (Math.abs(totalDelta) > MAX_TOTAL_DELTA) {
+                                                    c.scrollTop = startScrollTop + (totalDelta > 0 ? MAX_TOTAL_DELTA : -MAX_TOTAL_DELTA);
+                                                }
+                                            }, true);
+                                        })();
 
                                         function setupBridge() {
                                             if (typeof PDFViewerApplication !== 'undefined' && PDFViewerApplication.initializedPromise) {
