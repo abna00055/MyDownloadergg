@@ -1148,35 +1148,31 @@ fun PDFReaderScreen(
 
                                         (function() {
                                             var container = null;
-                                            var lastScrollTop = 0;
-                                            var userIsTouchingPage = false;
-                                            var MAX_AUTO_SCROLL_DELTA = 15;
+                                            var savedScrollTop = 0;
+                                            var isSelecting = false;
 
                                             function getContainer() {
                                                 if (!container) {
                                                     container = document.getElementById('viewerContainer');
-                                                    if (container) {
-                                                        lastScrollTop = container.scrollTop;
-                                                    }
                                                 }
                                                 return container;
                                             }
 
-                                            document.addEventListener('touchstart', function() {
-                                                userIsTouchingPage = true;
-                                            }, true);
-
-                                            document.addEventListener('touchmove', function() {
-                                                userIsTouchingPage = true;
-                                            }, true);
-
-                                            document.addEventListener('touchend', function() {
-                                                userIsTouchingPage = false;
-                                            }, true);
-
-                                            document.addEventListener('touchcancel', function() {
-                                                userIsTouchingPage = false;
-                                            }, true);
+                                            document.addEventListener('selectionchange', function() {
+                                                var sel = window.getSelection();
+                                                var hasSelection = sel && sel.toString().trim().length > 0;
+                                                var c = getContainer();
+                                                if (c) {
+                                                    if (hasSelection) {
+                                                        if (!isSelecting) {
+                                                            isSelecting = true;
+                                                            savedScrollTop = c.scrollTop;
+                                                        }
+                                                    } else {
+                                                        isSelecting = false;
+                                                    }
+                                                }
+                                            });
 
                                             document.addEventListener('scroll', function(e) {
                                                 var c = getContainer();
@@ -1185,13 +1181,15 @@ fun PDFReaderScreen(
                                                 var sel = window.getSelection();
                                                 var hasSelection = sel && sel.toString().trim().length > 0;
 
-                                                if (hasSelection && !userIsTouchingPage) {
-                                                    var delta = c.scrollTop - lastScrollTop;
-                                                    if (Math.abs(delta) > MAX_AUTO_SCROLL_DELTA) {
-                                                        c.scrollTop = lastScrollTop + (delta > 0 ? MAX_AUTO_SCROLL_DELTA : -MAX_AUTO_SCROLL_DELTA);
+                                                if (hasSelection) {
+                                                    if (!isSelecting) {
+                                                        isSelecting = true;
+                                                        savedScrollTop = c.scrollTop;
                                                     }
+                                                    c.scrollTop = savedScrollTop;
+                                                } else {
+                                                    isSelecting = false;
                                                 }
-                                                lastScrollTop = c.scrollTop;
                                             }, true);
                                         })();
 
