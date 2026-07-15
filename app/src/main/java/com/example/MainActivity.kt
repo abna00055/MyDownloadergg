@@ -1021,9 +1021,7 @@ fun PDFReaderScreen(
                                         background: rgba(0, 122, 255, 0.3) !important;
                                         color: transparent !important;
                                     }
-                                    .textLayer .endOfContent {
-                                        display: none !important;
-                                    }
+                                    #viewerContainer.selecting { overflow: hidden !important; }
                                 """.trimIndent()
 
                                 val styleInjection = """
@@ -1150,6 +1148,19 @@ fun PDFReaderScreen(
                                             // Intercept touchmove events in the capture phase during an active text selection.
                                             // This prevents PDF.js touchSwipe swipe-to-change-page listeners from calling preventDefault(),
                                             // which would otherwise break the WebView's native selection handles and make selection jump erratically.
+                                            document.addEventListener('selectionchange', function() {
+                                                var sel = window.getSelection();
+                                                var hasSelection = sel && sel.toString().trim().length > 0;
+                                                var c = document.getElementById('viewerContainer');
+                                                if (c) {
+                                                    if (hasSelection) {
+                                                        c.classList.add('selecting');
+                                                    } else {
+                                                        c.classList.remove('selecting');
+                                                    }
+                                                }
+                                            });
+
                                             window.addEventListener('touchmove', function(e) {
                                                 var sel = window.getSelection();
                                                 if (sel && sel.toString().trim().length > 0) {
