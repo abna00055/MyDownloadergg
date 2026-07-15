@@ -1147,48 +1147,13 @@ fun PDFReaderScreen(
                                         }
 
                                         (function() {
-                                            var container = null;
-                                            var savedScrollTop = 0;
-                                            var isSelecting = false;
-
-                                            function getContainer() {
-                                                if (!container) {
-                                                    container = document.getElementById('viewerContainer');
-                                                }
-                                                return container;
-                                            }
-
-                                            document.addEventListener('selectionchange', function() {
+                                            // Intercept touchmove events in the capture phase during an active text selection.
+                                            // This prevents PDF.js touchSwipe swipe-to-change-page listeners from calling preventDefault(),
+                                            // which would otherwise break the WebView's native selection handles and make selection jump erratically.
+                                            window.addEventListener('touchmove', function(e) {
                                                 var sel = window.getSelection();
-                                                var hasSelection = sel && sel.toString().trim().length > 0;
-                                                var c = getContainer();
-                                                if (c) {
-                                                    if (hasSelection) {
-                                                        if (!isSelecting) {
-                                                            isSelecting = true;
-                                                            savedScrollTop = c.scrollTop;
-                                                        }
-                                                    } else {
-                                                        isSelecting = false;
-                                                    }
-                                                }
-                                            });
-
-                                            document.addEventListener('scroll', function(e) {
-                                                var c = getContainer();
-                                                if (!c || e.target !== c) return;
-
-                                                var sel = window.getSelection();
-                                                var hasSelection = sel && sel.toString().trim().length > 0;
-
-                                                if (hasSelection) {
-                                                    if (!isSelecting) {
-                                                        isSelecting = true;
-                                                        savedScrollTop = c.scrollTop;
-                                                    }
-                                                    c.scrollTop = savedScrollTop;
-                                                } else {
-                                                    isSelecting = false;
+                                                if (sel && sel.toString().trim().length > 0) {
+                                                    e.stopPropagation();
                                                 }
                                             }, true);
                                         })();
